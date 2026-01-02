@@ -18,7 +18,7 @@ type SysUser struct {
 	Status      int            `gorm:"type:tinyint;default:1;comment:状态 1:启用 0:禁用" json:"status"`
 	DepartmentID uint          `gorm:"default:0;comment:部门ID" json:"departmentId"`
 	Department  *SysDepartment `gorm:"foreignKey:DepartmentID;references:ID" json:"department,omitempty"`
-	Roles       []SysRole      `gorm:"many2many:sys_user_roles" json:"roles"`
+	Roles       []SysRole      `gorm:"many2many:sys_user_role;joinForeignKey:UserID;joinReferences:RoleID" json:"roles"`
 	LastLoginAt *time.Time     `gorm:"comment:最后登录时间" json:"lastLoginAt,omitempty"`
 }
 
@@ -30,7 +30,7 @@ type SysRole struct {
 	Description string       `gorm:"type:varchar(200);comment:角色描述" json:"description"`
 	Sort        int          `gorm:"type:int;default:0;comment:排序" json:"sort"`
 	Status      int          `gorm:"type:tinyint;default:1;comment:状态 1:启用 0:禁用" json:"status"`
-	Users       []SysUser    `gorm:"many2many:sys_user_roles" json:"-"`
+	Users       []SysUser    `gorm:"many2many:sys_user_role;joinForeignKey:RoleID;joinReferences:UserID" json:"-"`
 	Menus       []SysMenu    `gorm:"many2many:sys_role_menus" json:"menus,omitempty"`
 }
 
@@ -66,14 +66,14 @@ type SysMenu struct {
 
 // SysUserRole 用户角色关联表
 type SysUserRole struct {
-	UserID uint `gorm:"primaryKey;comment:用户ID" json:"userId"`
-	RoleID uint `gorm:"primaryKey;comment:角色ID" json:"roleId"`
+	UserID uint `gorm:"primaryKey;column:user_id;comment:用户ID" json:"userId"`
+	RoleID uint `gorm:"primaryKey;column:role_id;comment:角色ID" json:"roleId"`
 }
 
 // SysRoleMenu 角色菜单关联表
 type SysRoleMenu struct {
-	RoleID uint `gorm:"primaryKey;comment:角色ID" json:"roleId"`
-	MenuID uint `gorm:"primaryKey;comment:菜单ID" json:"menuId"`
+	RoleID uint `gorm:"primaryKey;column:role_id;comment:角色ID" json:"roleId"`
+	MenuID uint `gorm:"primaryKey;column:menu_id;comment:菜单ID" json:"menuId"`
 }
 
 // TableName 指定表名
