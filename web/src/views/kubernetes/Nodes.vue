@@ -205,24 +205,24 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="CPU" width="140">
+      <el-table-column label="CPU" width="180">
         <template #default="{ row }">
           <div class="resource-cell">
             <div class="resource-icon resource-icon-cpu">
               <el-icon><Cpu /></el-icon>
             </div>
-            <span class="resource-value">{{ formatCPU(row.cpuCapacity) }}</span>
+            <span class="resource-value">{{ formatCPUWithUsage(row) }}</span>
           </div>
         </template>
       </el-table-column>
 
-      <el-table-column label="内存" width="140">
+      <el-table-column label="内存" width="180">
         <template #default="{ row }">
           <div class="resource-cell">
             <div class="resource-icon resource-icon-memory">
               <el-icon><Coin /></el-icon>
             </div>
-            <span class="resource-value">{{ formatMemory(row.memoryCapacity) }}</span>
+            <span class="resource-value">{{ formatMemoryWithUsage(row) }}</span>
           </div>
         </template>
       </el-table-column>
@@ -523,6 +523,58 @@ const formatMemory = (memory: string) => {
   if (mb >= 1) return Math.ceil(mb) + ' MB'
 
   return memory
+}
+
+// 格式化 CPU 显示（包含使用量）
+const formatCPUWithUsage = (node: NodeInfo) => {
+  const usedCores = (node.cpuUsed || 0) / 1000 // 毫核转核
+  const totalCores = parseCPU(node.cpuCapacity)
+
+  const used = usedCores.toFixed(1) // 已使用保留1位小数
+  const total = Math.round(totalCores) // 总数不保留小数
+
+  return `${used}/${total}核`
+}
+
+// 格式化内存显示（包含使用量）
+const formatMemoryWithUsage = (node: NodeInfo) => {
+  const usedBytes = node.memoryUsed || 0
+
+  // 解析总内存
+  const match = node.memoryCapacity.match(/^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti)?$/i)
+  if (!match) return '-'
+
+  const value = parseFloat(match[1])
+  const unit = match[2]?.toUpperCase()
+
+  let totalBytes = 0
+  if (!unit) {
+    totalBytes = value
+  } else {
+    switch (unit) {
+      case 'KI':
+        totalBytes = value * 1024
+        break
+      case 'MI':
+        totalBytes = value * 1024 * 1024
+        break
+      case 'GI':
+        totalBytes = value * 1024 * 1024 * 1024
+        break
+      case 'TI':
+        totalBytes = value * 1024 * 1024 * 1024 * 1024
+        break
+    }
+  }
+
+  // 转换为GB
+  const usedGB = usedBytes / (1024 * 1024 * 1024)
+  const totalGB = totalBytes / (1024 * 1024 * 1024)
+
+  const used = usedGB >= 1 ? usedGB.toFixed(1) : (usedBytes / (1024 * 1024)).toFixed(1)
+  const total = totalGB >= 1 ? Math.ceil(totalGB) + 'G' : Math.ceil(totalBytes / (1024 * 1024)) + 'M'
+
+  return `内存:${used}/${total}`
 }
 
 // 获取角色文本

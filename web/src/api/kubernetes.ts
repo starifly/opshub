@@ -129,6 +129,8 @@ export interface NodeInfo {
   annotations: Record<string, string>
   cpuCapacity: string
   memoryCapacity: string
+  cpuUsed: number
+  memoryUsed: number
   podCount: number
   podCapacity: number
   schedulable: boolean

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/metrics/pkg/apis/metrics/v1beta1"
 
 	"github.com/ydcloud-dy/opshub/plugins/kubernetes/service"
 )
@@ -64,9 +65,11 @@ type NodeInfo struct {
 	Labels           map[string]string `json:"labels"`
 	Annotations      map[string]string `json:"annotations"`
 	// 新增字段
-	CPUCapacity    string        `json:"cpuCapacity"`    // CPU容量
-	MemoryCapacity string        `json:"memoryCapacity"` // 内存容量
-	PodCount       int           `json:"podCount"`       // Pod数量
+	CPUCapacity    string `json:"cpuCapacity"`    // CPU容量
+	MemoryCapacity string `json:"memoryCapacity"` // 内存容量
+	CPUUsed        int64  `json:"cpuUsed"`        // CPU使用量（毫核）
+	MemoryUsed     int64  `json:"memoryUsed"`     // 内存使用量（字节）
+	PodCount       int    `json:"podCount"`       // Pod数量
 	PodCapacity    int           `json:"podCapacity"`    // Pod容量
 	Schedulable    bool          `json:"schedulable"`    // 是否可调度
 	TaintCount     int           `json:"taintCount"`     // 污点数量
@@ -281,6 +284,30 @@ func (h *ResourceHandler) ListNodes(c *gin.Context) {
 		return
 	}
 
+	// 获取metrics clientset
+	metricsClient, err := h.clusterService.GetCachedMetricsClientset(c.Request.Context(), uint(clusterID))
+	if err != nil {
+		fmt.Printf("❌ DEBUG [ListNodes]: GetCachedMetricsClientset failed: %v\n", err)
+		// 继续执行，只是没有metrics数据
+		metricsClient = nil
+	}
+
+	// 批量获取所有节点的metrics
+	nodeMetricsMap := make(map[string]*v1beta1.NodeMetrics)
+	if metricsClient != nil {
+		allNodeMetrics, err := metricsClient.MetricsV1beta1().NodeMetricses().List(c.Request.Context(), metav1.ListOptions{})
+		if err == nil {
+			fmt.Printf("✅ DEBUG [ListNodes]: Successfully got %d node metrics\n", len(allNodeMetrics.Items))
+			for _, nm := range allNodeMetrics.Items {
+				nodeMetricsMap[nm.Name] = &nm
+			}
+		} else {
+			fmt.Printf("❌ DEBUG [ListNodes]: Failed to get node metrics: %v\n", err)
+		}
+	} else {
+		fmt.Printf("⚠️  DEBUG [ListNodes]: metricsClient is nil\n")
+	}
+
 	// 获取所有Pod以计算每个节点的Pod数量
 	pods, err := clientset.CoreV1().Pods("").List(c.Request.Context(), metav1.ListOptions{})
 	podCountMap := make(map[string]int)
@@ -406,6 +433,16 @@ func (h *ResourceHandler) ListNodes(c *gin.Context) {
 				Reason:             cond.Reason,
 				Message:            cond.Message,
 			})
+		}
+
+		// 填充CPU和内存使用量
+		if nodeMetrics, ok := nodeMetricsMap[node.Name]; ok {
+			nodeInfo.CPUUsed = nodeMetrics.Usage.Cpu().MilliValue()
+			nodeInfo.MemoryUsed = nodeMetrics.Usage.Memory().Value()
+			fmt.Printf("📊 DEBUG [ListNodes]: Node %s - CPUUsed: %d millicores, MemoryUsed: %d bytes\n",
+				node.Name, nodeInfo.CPUUsed, nodeInfo.MemoryUsed)
+		} else {
+			fmt.Printf("⚠️  DEBUG [ListNodes]: No metrics found for node %s\n", node.Name)
 		}
 
 		nodeInfos = append(nodeInfos, nodeInfo)
