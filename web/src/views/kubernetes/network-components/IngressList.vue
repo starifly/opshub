@@ -12,7 +12,7 @@
         <el-option v-for="ns in namespaces" :key="ns.name" :label="ns.name" :value="ns.name" />
       </el-select>
 
-      <el-button type="primary" @click="handleCreate">创建 Ingress</el-button>
+      <el-button class="black-button" @click="handleCreate">创建 Ingress</el-button>
     </div>
 
     <div class="table-wrapper">
@@ -28,13 +28,24 @@
         <el-table-column label="命名空间" prop="namespace" width="140" />
         <el-table-column label="主机名" min-width="200">
           <template #default="{ row }">
-            <div v-for="host in row.hosts" :key="host" class="host-item">{{ host }}</div>
-            <div v-if="!row.hosts.length">-</div>
+            <div v-for="host in row.hosts" :key="host" class="host-item">
+              <el-icon class="host-icon"><Monitor /></el-icon>
+              <span class="host-text">{{ host }}</span>
+            </div>
+            <div v-if="!row.hosts.length" class="empty-text">-</div>
           </template>
         </el-table-column>
-        <el-table-column label="路径" min-width="200">
+        <el-table-column label="路径" min-width="250">
           <template #default="{ row }">
-            <div v-for="path in row.paths" :key="path.path">{{ path.path || '/' }}</div>
+            <div v-for="(path, index) in row.paths" :key="`${path.path}-${index}`" class="path-item">
+              <div class="path-path">{{ path.path || '/' }}</div>
+              <div class="path-service">
+                <el-icon class="service-icon"><Connection /></el-icon>
+                <span>{{ path.service }}</span>
+                <span class="path-port">:{{ path.port }}</span>
+              </div>
+            </div>
+            <div v-if="!row.paths.length" class="empty-text">-</div>
           </template>
         </el-table-column>
         <el-table-column label="Ingress Class" prop="ingressClass" width="150">
@@ -67,7 +78,7 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="yamlDialogVisible" :title="`Ingress YAML - ${selectedIngress?.name}`" width="900px" class="yaml-dialog">
+    <el-dialog v-model="yamlDialogVisible" :title="`Ingress YAML - ${selectedIngress?.name}`" width="900px" :lock-scroll="false" class="yaml-dialog">
       <div class="yaml-editor-wrapper">
         <div class="yaml-line-numbers">
           <div v-for="line in yamlLineCount" :key="line" class="line-number">{{ line }}</div>
@@ -101,7 +112,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Link, Document, Edit, Delete } from '@element-plus/icons-vue'
+import { Search, Link, Document, Edit, Delete, Monitor, Connection } from '@element-plus/icons-vue'
 import { getIngresses, getIngressYAML, updateIngressYAML, deleteIngress, getNamespaces, type IngressInfo } from '@/api/kubernetes'
 import IngressEditDialog from './IngressEditDialog.vue'
 
@@ -142,12 +153,15 @@ const filteredIngresses = computed(() => {
   return result
 })
 
-const loadIngresses = async () => {
+const loadIngresses = async (showSuccess = false) => {
   if (!props.clusterId) return
   loading.value = true
   try {
     const data = await getIngresses(props.clusterId, props.namespace || undefined)
     ingressList.value = data || []
+    if (showSuccess) {
+      ElMessage.success('刷新成功')
+    }
   } catch (error) {
     console.error(error)
     ElMessage.error('获取 Ingress 列表失败')
@@ -379,27 +393,34 @@ watch(() => props.namespace, () => {
   loadIngresses()
 })
 
-// 修复 YAML 弹窗打开时页面偏移的问题
-watch(yamlDialogVisible, (val) => {
-  if (val) {
-    const scrollBarWidth = window.innerWidth - document.documentElement.clientWidth
-    if (scrollBarWidth > 0) {
-      document.body.style.paddingRight = `${scrollBarWidth}px`
-    }
-  } else {
-    document.body.style.paddingRight = ''
-  }
-})
-
 onMounted(() => {
   loadIngresses()
   loadNamespaces()
+})
+
+// 暴露方法给父组件
+defineExpose({
+  loadData: () => loadIngresses(true)
 })
 </script>
 
 <style scoped>
 .ingress-list {
   width: 100%;
+}
+
+/* 黑色按钮样式 */
+.black-button {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border-color: #000000 !important;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.black-button:hover {
+  background-color: #333333 !important;
+  border-color: #333333 !important;
 }
 
 .search-bar {
@@ -443,9 +464,70 @@ onMounted(() => {
 }
 
 .host-item {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.host-item:last-child {
+  margin-bottom: 0;
+}
+
+.host-icon {
+  color: #d4af37;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.host-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  word-break: break-all;
+}
+
+.path-item {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background-color: #fef9e7;
+  border: 1px solid #d4af37;
+  border-radius: 6px;
+}
+
+.path-item:last-child {
+  margin-bottom: 0;
+}
+
+.path-path {
+  font-size: 14px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 6px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+}
+
+.path-service {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
   color: #606266;
-  line-height: 1.5;
+}
+
+.service-icon {
+  color: #d4af37;
+  font-size: 14px;
+}
+
+.path-port {
+  color: #909399;
+  font-size: 12px;
+}
+
+.empty-text {
+  color: #909399;
+  font-size: 14px;
 }
 
 /* 操作按钮 */

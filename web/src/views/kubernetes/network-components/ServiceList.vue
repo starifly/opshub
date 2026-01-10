@@ -26,7 +26,7 @@
         <el-option v-for="ns in namespaces" :key="ns.name" :label="ns.name" :value="ns.name" />
       </el-select>
 
-      <el-button type="primary" @click="handleCreate">创建服务</el-button>
+      <el-button class="black-button" @click="handleCreate">创建服务</el-button>
     </div>
 
     <!-- 服务列表 -->
@@ -118,7 +118,7 @@
     </div>
 
     <!-- YAML 弹窗 -->
-    <el-dialog v-model="yamlDialogVisible" :title="`Service YAML - ${selectedService?.name}`" width="900px" class="yaml-dialog">
+    <el-dialog v-model="yamlDialogVisible" :title="`Service YAML - ${selectedService?.name}`" width="900px" :lock-scroll="false" class="yaml-dialog">
       <div class="yaml-editor-wrapper">
         <div class="yaml-line-numbers">
           <div v-for="line in yamlLineCount" :key="line" class="line-number">{{ line }}</div>
@@ -205,12 +205,15 @@ const paginatedServices = computed(() => {
   return filteredServices.value.slice(start, end)
 })
 
-const loadServices = async () => {
+const loadServices = async (showSuccess = false) => {
   if (!props.clusterId) return
   loading.value = true
   try {
     const data = await getServices(props.clusterId, props.namespace || undefined)
     serviceList.value = data || []
+    if (showSuccess) {
+      ElMessage.success('刷新成功')
+    }
   } catch (error) {
     console.error(error)
     ElMessage.error('获取服务列表失败')
@@ -451,27 +454,34 @@ watch(() => props.namespace, () => {
   loadServices()
 })
 
-// 修复 YAML 弹窗打开时页面偏移的问题
-watch(yamlDialogVisible, (val) => {
-  if (val) {
-    const scrollBarWidth = window.innerWidth - document.documentElement.clientWidth
-    if (scrollBarWidth > 0) {
-      document.body.style.paddingRight = `${scrollBarWidth}px`
-    }
-  } else {
-    document.body.style.paddingRight = ''
-  }
-})
-
 onMounted(() => {
   loadServices()
   loadNamespaces()
+})
+
+// 暴露方法给父组件
+defineExpose({
+  loadData: () => loadServices(true)
 })
 </script>
 
 <style scoped>
 .service-list {
   width: 100%;
+}
+
+/* 黑色按钮样式 */
+.black-button {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border-color: #000000 !important;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.black-button:hover {
+  background-color: #333333 !important;
+  border-color: #333333 !important;
 }
 
 .search-bar {

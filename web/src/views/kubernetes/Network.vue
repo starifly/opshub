@@ -39,6 +39,7 @@
     <el-tabs v-model="activeTab" @tab-change="handleTabChange" class="network-tabs">
       <el-tab-pane label="Services" name="services">
         <ServiceList
+          ref="serviceListRef"
           v-if="activeTab === 'services'"
           :clusterId="selectedClusterId"
           :namespace="selectedNamespace"
@@ -50,6 +51,7 @@
 
       <el-tab-pane label="Ingress" name="ingresses">
         <IngressList
+          ref="ingressListRef"
           v-if="activeTab === 'ingresses'"
           :clusterId="selectedClusterId"
           :namespace="selectedNamespace"
@@ -61,6 +63,7 @@
 
       <el-tab-pane label="Network Policies" name="networkpolicies">
         <NetworkPolicyList
+          ref="networkPolicyListRef"
           v-if="activeTab === 'networkpolicies'"
           :clusterId="selectedClusterId"
           :namespace="selectedNamespace"
@@ -72,6 +75,7 @@
 
       <el-tab-pane label="Endpoints" name="endpoints">
         <EndpointsList
+          ref="endpointsListRef"
           v-if="activeTab === 'endpoints'"
           :clusterId="selectedClusterId"
           :namespace="selectedNamespace"
@@ -100,6 +104,12 @@ const clusterList = ref<Cluster[]>([])
 const selectedClusterId = ref<number>()
 const selectedNamespace = ref('')
 const activeTab = ref('services')
+
+// 子组件引用
+const serviceListRef = ref()
+const ingressListRef = ref()
+const networkPolicyListRef = ref()
+const endpointsListRef = ref()
 
 // 加载集群列表
 const loadClusters = async () => {
@@ -140,7 +150,21 @@ const handleTabChange = () => {
 
 // 加载当前资源
 const loadCurrentResources = () => {
-  // 由子组件处理
+  // 根据当前活动的 tab 刷新对应的资源
+  switch (activeTab.value) {
+    case 'services':
+      serviceListRef.value?.loadData()
+      break
+    case 'ingresses':
+      ingressListRef.value?.loadData()
+      break
+    case 'networkpolicies':
+      networkPolicyListRef.value?.loadData()
+      break
+    case 'endpoints':
+      endpointsListRef.value?.loadData()
+      break
+  }
 }
 
 // Service 操作

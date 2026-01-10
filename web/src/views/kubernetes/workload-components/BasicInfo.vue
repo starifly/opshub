@@ -7,15 +7,50 @@
     <div class="panel-content">
       <div class="form-row">
         <label>名称</label>
-        <el-input v-model="formData.name" size="small" disabled />
+        <el-input v-model="formData.name" size="small" :disabled="!isCreateMode" placeholder="请输入工作负载名称" />
       </div>
       <div class="form-row">
         <label>命名空间</label>
-        <el-input v-model="formData.namespace" size="small" disabled />
+        <el-select v-if="isCreateMode" v-model="formData.namespace" size="small" filterable placeholder="选择命名空间" style="width: 100%">
+          <el-option
+            v-for="ns in namespaceList"
+            :key="ns.name"
+            :label="ns.name"
+            :value="ns.name"
+          />
+        </el-select>
+        <el-input v-else v-model="formData.namespace" size="small" disabled />
       </div>
       <div class="form-row" v-if="formData.type === 'Deployment' || formData.type === 'StatefulSet'">
         <label>副本数</label>
         <el-input-number v-model="formData.replicas" :min="0" :max="100" size="small" />
+        <div class="form-tip" v-if="formData.type === 'Deployment'">Deployment 会维护指定数量的 Pod 副本</div>
+        <div class="form-tip" v-else-if="formData.type === 'StatefulSet'">StatefulSet 会维护指定数量的有序 Pod 副本</div>
+      </div>
+      <div class="form-row" v-if="formData.type === 'DaemonSet'">
+        <label>副本数</label>
+        <el-input value="每个节点一个 Pod" disabled size="small" />
+        <div class="form-tip">DaemonSet 会在每个符合条件的节点上运行一个 Pod</div>
+      </div>
+      <div class="form-row" v-if="formData.type === 'Pod'">
+        <label>副本数</label>
+        <el-input value="单个 Pod（无副本）" disabled size="small" />
+        <div class="form-tip">Pod 是独立的单元，不涉及副本管理</div>
+      </div>
+      <div class="form-row" v-if="formData.type === 'Job'">
+        <label>副本数</label>
+        <el-input value="请使用「扩容配置」中的 Job 任务配置" disabled size="small" />
+        <div class="form-tip">Job 使用完成次数和并行度来控制 Pod 数量，而非传统副本数</div>
+      </div>
+      <div class="form-row" v-if="formData.type === 'CronJob'">
+        <label>副本数</label>
+        <el-input value="请使用「扩容配置」中的 CronJob 配置" disabled size="small" />
+        <div class="form-tip">CronJob 通过调度规则和 Job 配置来管理 Pod，而非传统副本数</div>
+      </div>
+      <div class="form-row" v-if="formData.type === 'CronJob' && isCreateMode">
+        <label>调度规则</label>
+        <el-input v-model="formData.schedule" size="small" placeholder="例如: */5 * * * * (每5分钟执行一次)" />
+        <div class="form-tip">Cron 表达式格式: 分 时 日 月 周。常用示例: */5 * * * * (每5分钟)、0 * * * * (每小时)、0 0 * * * (每天零点)</div>
       </div>
       <div class="form-section">
         <div class="form-section-header">
@@ -59,12 +94,15 @@ interface FormData {
   namespace: string
   type: string
   replicas: number
+  schedule?: string  // CronJob 调度规则
   labels: { key: string; value: string }[]
   annotations: { key: string; value: string }[]
 }
 
 const props = defineProps<{
   formData: FormData
+  isCreateMode?: boolean
+  namespaceList?: { name: string }[]
 }>()
 
 const emit = defineEmits<{
@@ -165,6 +203,13 @@ const emit = defineEmits<{
   background: #fafafa;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #999;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
 .form-section {

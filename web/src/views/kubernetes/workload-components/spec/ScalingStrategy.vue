@@ -119,13 +119,13 @@ const emit = defineEmits<{
 
 // 创建本地响应式数据
 const localFormData = reactive<FormData>({
-  strategyType: props.formData.strategyType || 'RollingUpdate',
-  maxSurge: props.formData.maxSurge || '25%',
-  maxUnavailable: props.formData.maxUnavailable || '25%',
-  minReadySeconds: props.formData.minReadySeconds || 0,
-  progressDeadlineSeconds: props.formData.progressDeadlineSeconds || 600,
-  revisionHistoryLimit: props.formData.revisionHistoryLimit || 10,
-  timeoutSeconds: props.formData.timeoutSeconds || 600
+  strategyType: props.formData.strategyType ?? 'RollingUpdate',
+  maxSurge: props.formData.maxSurge !== undefined ? props.formData.maxSurge : '25%',
+  maxUnavailable: props.formData.maxUnavailable !== undefined ? props.formData.maxUnavailable : '25%',
+  minReadySeconds: props.formData.minReadySeconds ?? 0,
+  progressDeadlineSeconds: props.formData.progressDeadlineSeconds ?? 600,
+  revisionHistoryLimit: props.formData.revisionHistoryLimit ?? 10,
+  timeoutSeconds: props.formData.timeoutSeconds ?? 600
 })
 
 const handleUpdate = () => {

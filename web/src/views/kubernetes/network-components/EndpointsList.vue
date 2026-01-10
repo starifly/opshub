@@ -100,12 +100,15 @@ const filteredEndpoints = computed(() => {
   return result
 })
 
-const loadEndpoints = async () => {
+const loadEndpoints = async (showSuccess = false) => {
   if (!props.clusterId) return
   loading.value = true
   try {
     const data = await getEndpoints(props.clusterId, props.namespace || undefined)
     endpointsList.value = data || []
+    if (showSuccess) {
+      ElMessage.success('刷新成功')
+    }
   } catch (error) {
     console.error(error)
     ElMessage.error('获取 Endpoints 列表失败')
@@ -146,6 +149,11 @@ watch(() => props.namespace, () => {
 onMounted(() => {
   loadEndpoints()
   loadNamespaces()
+})
+
+// 暴露方法给父组件
+defineExpose({
+  loadData: () => loadEndpoints(true)
 })
 </script>
 

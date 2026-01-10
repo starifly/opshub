@@ -1352,16 +1352,78 @@ const saveTaints = async () => {
     const lines = taintOriginalYaml.value.split('\n')
     let updatedLines: string[] = []
     let i = 0
+    let inSpec = false
+    let taintsFound = false
 
     while (i < lines.length) {
       const line = lines[i]
 
-      // 检测 taints: 开始（在 spec 下的 2 空格缩进）
-      if (/^  taints:\s*$/.test(line)) {
-        // 如果有污点，保留 taints 并添加新内容
-        if (validTaints.length > 0) {
-          updatedLines.push(line)
-          // 添加污点内容（列表项2空格，属性4空格）
+      // 检测 spec: 开始
+      if (/^spec:\s*$/.test(line)) {
+        inSpec = true
+        updatedLines.push(line)
+        i++
+        // 处理 spec 下的内容
+        while (i < lines.length) {
+          const specLine = lines[i]
+
+          // 检测 taints: 开始（在 spec 下的 2 空格缩进）
+          if (/^  taints:\s*$/.test(specLine)) {
+            taintsFound = true
+            // 如果有污点，保留 taints 并添加新内容
+            if (validTaints.length > 0) {
+              updatedLines.push(specLine)
+              // 添加污点内容（列表项2空格，属性4空格）
+              for (const taint of validTaints) {
+                if (taint.value) {
+                  updatedLines.push(`  - key: ${taint.key}`)
+                  updatedLines.push(`    value: ${taint.value}`)
+                  updatedLines.push(`    effect: ${taint.effect}`)
+                } else {
+                  updatedLines.push(`  - key: ${taint.key}`)
+                  updatedLines.push(`    effect: ${taint.effect}`)
+                }
+              }
+            }
+            // 跳过原有的污点内容
+            i++
+            // 跳过所有污点条目（2 空格缩进的 "- " 开头）
+            while (i < lines.length && /^  -\s/.test(lines[i])) {
+              i++
+              // 跳过污点的属性行（4 空格缩进）
+              while (i < lines.length && /^    /.test(lines[i])) {
+                i++
+              }
+            }
+            continue
+          }
+
+          // 如果遇到新的2空格缩进字段，且还没找到taints，则在这里插入
+          if (!taintsFound && /^  [a-z]/.test(specLine)) {
+            // 先添加 taints（如果有）
+            if (validTaints.length > 0) {
+              updatedLines.push(`  taints:`)
+              for (const taint of validTaints) {
+                if (taint.value) {
+                  updatedLines.push(`  - key: ${taint.key}`)
+                  updatedLines.push(`    value: ${taint.value}`)
+                  updatedLines.push(`    effect: ${taint.effect}`)
+                } else {
+                  updatedLines.push(`  - key: ${taint.key}`)
+                  updatedLines.push(`    effect: ${taint.effect}`)
+                }
+              }
+            }
+            taintsFound = true
+          }
+
+          // 添加当前行
+          updatedLines.push(specLine)
+          i++
+        }
+        // 如果 spec 下没有其他字段且没有找到 taints，添加 taints
+        if (!taintsFound && validTaints.length > 0) {
+          updatedLines.push(`  taints:`)
           for (const taint of validTaints) {
             if (taint.value) {
               updatedLines.push(`  - key: ${taint.key}`)
@@ -1373,24 +1435,28 @@ const saveTaints = async () => {
             }
           }
         }
-        // 跳过原有的污点内容
-        i++
-        // 跳过所有污点条目（2 空格缩进的 "- " 开头）
-        while (i < lines.length && /^  -\s/.test(lines[i])) {
-          i++
-          // 跳过污点的属性行（4 空格缩进）
-          while (i < lines.length && /^    /.test(lines[i])) {
-            i++
-          }
-        }
+
+        inSpec = false
         continue
       }
 
-      updatedLines.push(line)
+      // 如果不在 spec 中，直接添加行
+      if (!inSpec) {
+        updatedLines.push(line)
+      }
       i++
     }
 
     const updatedYaml = updatedLines.join('\n')
+
+    // 调试日志
+    console.log('===== 污点保存调试信息 =====')
+    console.log('原始 YAML 行数:', lines.length)
+    console.log('更新后 YAML 行数:', updatedLines.length)
+    console.log('保存的污点数量:', validTaints.length)
+    console.log('生成的 YAML:')
+    console.log(updatedYaml)
+    console.log('==========================')
 
     // 调用 API 保存
     await axios.put(
@@ -1408,8 +1474,19 @@ const saveTaints = async () => {
     taintEditMode.value = false
     // 刷新节点列表
     await loadNodes()
-    // 更新当前显示的污点列表
-    taintList.value = validTaints
+    // 更新当前选中的节点为最新数据
+    const updatedNode = nodeList.value.find(n => n.name === nodeName)
+    if (updatedNode) {
+      selectedNode.value = updatedNode
+      // 更新当前显示的污点列表
+      taintList.value = (updatedNode.taints || []).map(t => ({
+        key: t.key,
+        value: t.value,
+        effect: t.effect
+      }))
+    } else {
+      taintList.value = validTaints
+    }
   } catch (error: any) {
     console.error('保存污点失败:', error)
     ElMessage.error(`保存失败: ${error.response?.data?.message || error.message}`)

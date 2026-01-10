@@ -49,6 +49,7 @@ func RegisterRoutes(router *gin.RouterGroup, db *gorm.DB) {
 
 		// Shell WebSocket
 		clusters.GET("/shell/nodes/:nodeName", resourceHandler.NodeShellWebSocket)
+		clusters.GET("/shell/pods", resourceHandler.PodShellWebSocket)
 
 		// CloudTTY 管理
 		clusters.GET("/cloudtty/status", resourceHandler.GetCloudTTYStatus)
@@ -62,11 +63,22 @@ func RegisterRoutes(router *gin.RouterGroup, db *gorm.DB) {
 		clusters.PUT("/resources/namespaces/:namespaceName/yaml", resourceHandler.UpdateNamespaceYAML)
 		clusters.DELETE("/resources/namespaces/:namespaceName", resourceHandler.DeleteNamespace)
 		clusters.GET("/resources/pods", resourceHandler.ListPods)
+		clusters.GET("/resources/pods/metrics", resourceHandler.GetPodsMetrics)
+		clusters.GET("/resources/pods/logs", resourceHandler.GetPodLogs)
 		clusters.GET("/resources/deployments", resourceHandler.ListDeployments)
 		clusters.GET("/resources/workloads", resourceHandler.GetWorkloads)
+		clusters.GET("/resources/workloads/:namespace/:name", resourceHandler.GetWorkloadDetail)
+		clusters.GET("/resources/workloads/:namespace/:name/replicasets", resourceHandler.GetWorkloadReplicaSets)
+		clusters.GET("/resources/workloads/:namespace/:name/pods", resourceHandler.GetWorkloadPods)
+		clusters.GET("/resources/workloads/:namespace/:name/services", resourceHandler.GetWorkloadServices)
+		clusters.GET("/resources/workloads/:namespace/:name/ingresses", resourceHandler.GetWorkloadIngresses)
 		clusters.GET("/resources/workloads/:namespace/:name/yaml", resourceHandler.GetWorkloadYAML)
 		clusters.PUT("/resources/workloads/:namespace/:name/yaml", resourceHandler.UpdateWorkloadYAML)
 		clusters.POST("/workloads/update", resourceHandler.UpdateWorkload)
+		clusters.POST("/workloads/pause", resourceHandler.PauseWorkload)
+		clusters.POST("/workloads/rollback", resourceHandler.RollbackWorkload)
+		clusters.POST("/resources/workloads/create", resourceHandler.CreateWorkloadFromYAML)
+		clusters.DELETE("/resources/workloads/:namespace/:name", resourceHandler.DeleteWorkload)
 		clusters.GET("/resources/api-groups", resourceHandler.GetAPIGroups)
 		clusters.GET("/resources/api-resources", resourceHandler.GetResourcesByAPIGroup)
 

@@ -19,9 +19,72 @@
       </div>
     </div>
 
-    <!-- 搜索和筛选 -->
-    <div class="search-bar">
-      <div class="search-inputs">
+    <!-- 上下文选择栏 -->
+    <div class="context-bar">
+      <div class="context-selectors">
+        <div class="context-item">
+          <span class="context-label">
+            <el-icon><Platform /></el-icon>
+            集群
+          </span>
+          <el-select
+            v-model="selectedClusterId"
+            placeholder="选择集群"
+            class="context-select"
+            @change="handleClusterChange"
+          >
+            <el-option
+              v-for="cluster in clusterList"
+              :key="cluster.id"
+              :label="cluster.alias || cluster.name"
+              :value="cluster.id"
+            />
+          </el-select>
+        </div>
+
+        <div class="context-item">
+          <span class="context-label">
+            <el-icon><FolderOpened /></el-icon>
+            命名空间
+          </span>
+          <el-select
+            v-model="selectedNamespace"
+            placeholder="所有命名空间"
+            clearable
+            filterable
+            @change="handleSearch"
+            class="context-select"
+          >
+            <el-option
+              v-for="ns in namespaceList"
+              :key="ns.name"
+              :label="ns.name"
+              :value="ns.name"
+            />
+          </el-select>
+        </div>
+      </div>
+    </div>
+
+    <!-- 工作负载类型标签 -->
+    <div class="workload-types-bar">
+      <div
+        v-for="type in workloadTypes"
+        :key="type.value"
+        :class="['type-tab', { active: selectedType === type.value }]"
+        @click="handleTypeChange(type.value)"
+      >
+        <el-icon class="type-icon">
+          <component :is="type.icon" />
+        </el-icon>
+        <span class="type-label">{{ type.label }}</span>
+        <span class="type-count" v-if="type.count !== undefined">({{ type.count }})</span>
+      </div>
+    </div>
+
+    <!-- 操作栏 -->
+    <div class="action-bar">
+      <div class="search-section">
         <el-input
           v-model="searchName"
           placeholder="搜索工作负载名称..."
@@ -35,58 +98,23 @@
             <el-icon class="search-icon"><Search /></el-icon>
           </template>
         </el-input>
+      </div>
 
-        <el-select
-          v-model="selectedClusterId"
-          placeholder="选择集群"
-          class="cluster-select"
-          @change="handleClusterChange"
-        >
-          <template #prefix>
-            <el-icon class="search-icon"><Platform /></el-icon>
-          </template>
-          <el-option
-            v-for="cluster in clusterList"
-            :key="cluster.id"
-            :label="cluster.alias || cluster.name"
-            :value="cluster.id"
-          />
-        </el-select>
+      <div class="action-buttons">
+        <el-button type="primary" @click="handleAddWorkloadYAML" class="add-button">
+          <el-icon><Document /></el-icon>
+          YAML创建
+        </el-button>
 
-        <el-select
-          v-model="selectedNamespace"
-          placeholder="命名空间"
-          clearable
-          @change="handleSearch"
-          class="filter-select"
+        <el-button
+          v-if="selectedType !== 'Pod'"
+          type="success"
+          @click="handleAddWorkloadForm"
+          class="add-button-form"
         >
-          <template #prefix>
-            <el-icon class="search-icon"><FolderOpened /></el-icon>
-          </template>
-          <el-option
-            v-for="ns in namespaceList"
-            :key="ns.name"
-            :label="ns.name"
-            :value="ns.name"
-          />
-        </el-select>
-
-        <el-select
-          v-model="selectedType"
-          placeholder="工作负载类型"
-          @change="handleTypeChange"
-          class="filter-select"
-        >
-          <template #prefix>
-            <el-icon class="search-icon"><Grid /></el-icon>
-          </template>
-          <el-option label="所有" value="" />
-          <el-option label="Deployment" value="Deployment" />
-          <el-option label="StatefulSet" value="StatefulSet" />
-          <el-option label="DaemonSet" value="DaemonSet" />
-          <el-option label="Job" value="Job" />
-          <el-option label="CronJob" value="CronJob" />
-        </el-select>
+          <el-icon><Edit /></el-icon>
+          表单创建
+        </el-button>
       </div>
     </div>
 
@@ -111,7 +139,7 @@
           <template #default="{ row }">
             <div class="workload-name-cell">
               <div class="workload-name-content">
-                <div class="workload-name golden-text">{{ row.name }}</div>
+                <div class="workload-name golden-text clickable" @click="handleShowDetail(row)">{{ row.name }}</div>
                 <div class="workload-namespace">{{ row.namespace }}</div>
               </div>
             </div>
@@ -306,19 +334,504 @@
       </template>
     </el-dialog>
 
+    <!-- 工作负载详情对话框 -->
+    <el-dialog
+      v-model="detailDialogVisible"
+      :title="`${detailData?.type || ''} - ${detailData?.name || ''}`"
+      width="1200px"
+      class="detail-dialog"
+    >
+      <div v-if="detailData" class="detail-wrapper">
+        <!-- 基本信息区域 -->
+        <div class="basic-info-section">
+          <!-- 第一行：名称、命名空间、存活时间 -->
+          <div class="info-row">
+            <div class="info-item">
+              <span class="info-label">名称</span>
+              <span class="info-value">{{ detailData.workload?.metadata?.name || detailData.name }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">命名空间</span>
+              <span class="info-value">{{ detailData.workload?.metadata?.namespace || detailData.namespace }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">存活时间</span>
+              <span class="info-value">{{ formatAgeShort(detailData.workload?.metadata?.creationTimestamp) }}</span>
+            </div>
+          </div>
+
+          <!-- 第二行：镜像名称 -->
+          <div class="info-row" v-if="getContainerImageList(detailData.workload).length > 0">
+            <div class="info-item full-width">
+              <span class="info-label">镜像名称</span>
+              <div class="info-value images-list">
+                <div v-for="(image, idx) in getContainerImageList(detailData.workload)" :key="idx" class="image-tag">
+                  {{ image }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 第三行：标签 -->
+          <div class="info-row" v-if="detailData.workload?.metadata?.labels && Object.keys(detailData.workload.metadata.labels).length > 0">
+            <div class="info-item full-width">
+              <span class="info-label">标签</span>
+              <div class="info-value labels-list">
+                <el-tag
+                  v-for="(value, key) in detailData.workload.metadata.labels"
+                  :key="key"
+                  size="small"
+                  class="label-tag"
+                  type="info"
+                >
+                  {{ key }}: {{ value }}
+                </el-tag>
+              </div>
+            </div>
+          </div>
+
+          <!-- 第四行：注解 -->
+          <div class="info-row" v-if="detailData.workload?.metadata?.annotations && Object.keys(detailData.workload.metadata.annotations).length > 0">
+            <div class="info-item full-width">
+              <span class="info-label">注解</span>
+              <div class="info-value">
+                <el-tooltip :content="getAnnotationsTooltip(detailData.workload.metadata.annotations)" placement="top" effect="light" :show-after="500">
+                  <span class="annotations-text">{{ getAnnotationsText(detailData.workload.metadata.annotations) }}</span>
+                </el-tooltip>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 标签页区域 -->
+        <el-tabs v-model="activeDetailTab" type="border-card" class="detail-tabs">
+          <el-tab-pane label="容器组" name="pods">
+            <div class="tab-content">
+              <el-table :data="detailData.pods" size="default" class="pods-table">
+                <el-table-column prop="metadata.name" label="名称" min-width="220" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <div class="pod-name-cell">
+                      <el-icon class="pod-icon"><Box /></el-icon>
+                      <span class="pod-name">{{ row.metadata?.name }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="90" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="getPodStatusType(row.status?.phase)" size="small" effect="plain">
+                      {{ getPodStatusText(row.status?.phase) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="CPU" width="120" align="center">
+                  <template #default="{ row }">
+                    <span class="resource-value">{{ getPodCPU(row) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="内存" width="120" align="center">
+                  <template #default="{ row }">
+                    <span class="resource-value">{{ getPodMemory(row) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="重启" width="80" align="center">
+                  <template #default="{ row }">
+                    <span :class="{'restart-high': getRestartCount(row) > 5}">{{ getRestartCount(row) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="spec.nodeName" label="节点" min-width="140" show-overflow-tooltip />
+                <el-table-column label="操作" width="70" align="center" fixed="right">
+                  <template #default="{ row }">
+                    <el-dropdown trigger="click" @command="(cmd) => handlePodAction(cmd, row)">
+                      <el-button type="primary" size="small" circle :icon="MoreFilled" />
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item v-for="container in row.spec?.containers || []" :key="container.name" disabled>
+                            <div class="container-group-header">{{ container.name }}</div>
+                          </el-dropdown-item>
+                          <el-dropdown-item v-for="container in row.spec?.containers || []" :key="`terminal-${container.name}`" :command="{ action: 'terminal', container: container.name, pod: row.metadata?.name }">
+                            <el-icon><Monitor /></el-icon>
+                            <span>{{ container.name }} 终端</span>
+                          </el-dropdown-item>
+                          <el-dropdown-item v-for="container in row.spec?.containers || []" :key="`logs-${container.name}`" :command="{ action: 'logs', container: container.name, pod: row.metadata?.name }">
+                            <el-icon><Document /></el-icon>
+                            <span>{{ container.name }} 日志</span>
+                          </el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="服务" name="services">
+            <div class="tab-content">
+              <el-table :data="detailData.services" class="detail-table services-table" v-if="detailData.services && detailData.services.length > 0">
+                <el-table-column label="名称" min-width="220" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <div class="service-name-wrapper">
+                      <el-icon class="service-icon"><Connection /></el-icon>
+                      <span class="service-name-text">{{ row.metadata?.name || '-' }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="类型" width="110" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="getServiceTypeColor(row.spec?.type)" size="small" effect="plain">
+                      {{ row.spec?.type || '-' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="集群IP" width="130" align="center">
+                  <template #default="{ row }">
+                    <div class="ip-cell">
+                      <span v-if="row.spec?.clusterIP" class="ip-text">{{ row.spec.clusterIP }}</span>
+                      <span v-else class="empty-text">None</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="外部IP" width="130" align="center">
+                  <template #default="{ row }">
+                    <div class="ip-cell">
+                      <span v-if="row.spec?.externalIPs && row.spec.externalIPs.length > 0" class="ip-text external-ip">
+                        {{ row.spec.externalIPs[0] }}
+                        <el-tooltip v-if="row.spec.externalIPs.length > 1" :content="row.spec.externalIPs.join(', ')" placement="top">
+                          <span class="more-badge">+{{ row.spec.externalIPs.length - 1 }}</span>
+                        </el-tooltip>
+                      </span>
+                      <span v-else-if="row.status?.loadBalancer?.ingress && row.status.loadBalancer.ingress.length > 0" class="ip-text external-ip">
+                        {{ row.status.loadBalancer.ingress[0].ip || row.status.loadBalancer.ingress[0].hostname }}
+                      </span>
+                      <span v-else class="empty-text">-</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="端口" min-width="320">
+                  <template #default="{ row }">
+                    <div v-if="row.spec?.ports?.length > 0" class="ports-combined">
+                      <div v-for="(port, idx) in row.spec.ports" :key="idx" class="port-row">
+                        <div class="port-info">
+                          <el-tag size="small" :type="port.protocol === 'TCP' ? '' : 'warning'" effect="plain">
+                            {{ port.protocol || 'TCP' }}
+                          </el-tag>
+                          <span class="port-number">{{ port.port }}</span>
+                          <el-icon class="port-arrow"><Right /></el-icon>
+                          <span class="target-port">{{ port.targetPort || port.port }}</span>
+                          <span v-if="row.spec?.type === 'NodePort' && port.nodePort" class="nodeport-badge">
+                            NodePort: {{ port.nodePort }}
+                          </span>
+                        </div>
+                        <div v-if="port.name" class="port-name">{{ port.name }}</div>
+                      </div>
+                    </div>
+                    <span v-else class="empty-text">-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="存活时间" width="100" align="center">
+                  <template #default="{ row }">
+                    <span class="age-text">{{ calculateAge(row.metadata?.creationTimestamp) }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-else description="暂无服务" :image-size="120" />
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="路由" name="ingresses">
+            <div class="tab-content">
+              <div v-if="detailData.ingresses && detailData.ingresses.length > 0" class="ingress-content">
+                <!-- 域名列表 -->
+                <div class="ingress-hosts-section">
+                  <div class="section-title">
+                    <el-icon><Link /></el-icon>
+                    <span>域名列表</span>
+                  </div>
+                  <div class="hosts-list">
+                    <div v-for="ingress in ingressHosts" :key="ingress.host" class="host-item">
+                      <div class="host-content">
+                        <el-icon class="host-icon"><Platform /></el-icon>
+                        <el-tooltip :content="ingress.host" placement="top">
+                          <span class="host-text">{{ ingress.host }}</span>
+                        </el-tooltip>
+                      </div>
+                      <div class="host-ingress-names">
+                        <span v-for="name in ingress.names" :key="name" class="ingress-name-tag">{{ name }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 路由规则表格 -->
+                <div class="ingress-rules-section">
+                  <div class="section-title">
+                    <el-icon><Guide /></el-icon>
+                    <span>路由规则</span>
+                  </div>
+                  <el-table :data="ingressRules" class="ingress-rules-table">
+                    <el-table-column label="名称" min-width="180">
+                      <template #default="{ row }">
+                        <div class="rule-name-cell">
+                          <el-icon class="rule-icon"><Document /></el-icon>
+                          <span class="rule-name-text">{{ row.ingressName }}</span>
+                        </div>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="域名" min-width="200" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        <span class="host-text-cell">{{ row.host || '-' }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="路径" min-width="180">
+                      <template #default="{ row }">
+                        <el-tooltip :content="`${row.pathType || 'Prefix'}: ${row.path || '/'}`" placement="top">
+                          <span class="path-text-simple">{{ row.path || '/' }}</span>
+                        </el-tooltip>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="服务" min-width="150">
+                      <template #default="{ row }">
+                        <span class="service-name-cell">{{ row.serviceName || '-' }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="端口" width="100" align="center">
+                      <template #default="{ row }">
+                        <span v-if="row.servicePort" class="port-number-cell">{{ row.servicePort }}</span>
+                        <span v-else class="empty-text">-</span>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
+              <el-empty v-else description="暂无路由" :image-size="120" />
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="运行时信息" name="runtime">
+            <div class="tab-content">
+              <div v-if="detailData.workload" class="runtime-content">
+                <el-table :data="getRuntimeInfo()" class="runtime-table" border>
+                  <el-table-column label="类别" width="150">
+                    <template #default="{ row }">
+                      <div class="runtime-category">
+                        <el-icon :class="`category-icon ${row.iconClass}`"><component :is="row.icon" /></el-icon>
+                        <span class="category-text">{{ row.category }}</span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="140" align="center">
+                    <template #default="{ row }">
+                      <div class="status-cell">
+                        <el-icon :class="`status-indicator status-${row.statusType} ${row.isLoading ? 'is-loading' : ''}`">
+                          <component :is="row.statusIcon" />
+                        </el-icon>
+                        <span :class="`status-text status-${row.statusType}`">{{ row.status }}</span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="消息" min-width="350">
+                    <template #default="{ row }">
+                      <div class="message-cell">
+                        <span class="message-text">{{ row.message }}</span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="最后更新时间" width="160" align="center">
+                    <template #default="{ row }">
+                      <span class="time-text">{{ row.lastUpdate }}</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+              <el-empty v-else description="暂无运行时信息" :image-size="120" />
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="暂停" name="paused">
+            <div class="tab-content">
+              <div class="paused-content">
+                <div class="paused-header">
+                  <div class="paused-icon-wrapper">
+                    <el-icon class="paused-icon" :class="{ 'is-paused': isWorkloadPaused }">
+                      <VideoPause v-if="isWorkloadPaused" />
+                      <VideoPlay v-else />
+                    </el-icon>
+                  </div>
+                  <div class="paused-title">
+                    <h3>工作负载暂停状态</h3>
+                    <p class="paused-status-text" :class="{ 'paused': isWorkloadPaused }">
+                      {{ isWorkloadPaused ? '当前已暂停' : '当前运行中' }}
+                    </p>
+                  </div>
+                </div>
+
+                <div class="paused-control">
+                  <div class="paused-switch-wrapper">
+                    <span class="switch-label">暂停状态</span>
+                    <el-switch
+                      v-model="isWorkloadPaused"
+                      size="large"
+                      :loading="pauseLoading"
+                      active-text="已暂停"
+                      inactive-text="运行中"
+                      @change="handlePauseChange"
+                      style="--el-switch-on-color: #f56c6c; --el-switch-off-color: #67c23a;"
+                    />
+                  </div>
+                  <div class="paused-description">
+                    <el-alert
+                      :title="isWorkloadPaused ? '暂停状态下，新的 Pod 副本不会被创建，但现有的 Pod 不会被删除。' : '正常运行状态下，控制器会根据指定的副本数创建和管理 Pod。'"
+                      :type="isWorkloadPaused ? 'warning' : 'success'"
+                      :closable="false"
+                      show-icon
+                    />
+                  </div>
+                </div>
+
+                <div class="paused-info">
+                  <el-descriptions :column="2" border>
+                    <el-descriptions-item label="工作负载类型">
+                      {{ workloadType }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="命名空间">
+                      {{ detailData.workload?.metadata?.namespace || '-' }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="当前副本数">
+                      {{ detailData.workload?.spec?.replicas || 0 }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="可用副本数">
+                      {{ detailData.workload?.status?.availableReplicas || 0 }}
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </div>
+              </div>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane label="历史版本" name="revisions">
+            <div class="tab-content">
+              <div v-if="sortedReplicaSets.length > 0" class="revisions-content">
+                <el-table :data="sortedReplicaSets" class="revisions-table" stripe>
+                  <el-table-column label="版本" width="140" align="center">
+                    <template #default="{ row }">
+                      <div class="revision-cell">
+                        <div class="revision-number-wrapper">
+                          <span class="revision-icon">#</span>
+                          <span class="revision-number">{{ getReplicaSetRevision(row) }}</span>
+                        </div>
+                        <el-tag v-if="isCurrentReplicaSet(row)" size="small" type="success" class="current-tag">
+                          <el-icon><CircleCheck /></el-icon>
+                          当前
+                        </el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="镜像" min-width="350">
+                    <template #default="{ row }">
+                      <div class="images-column-enhanced">
+                        <div v-for="(image, idx) in getReplicaSetImages(row)" :key="idx" class="image-card">
+                          <div class="image-icon">
+                            <el-icon><Box /></el-icon>
+                          </div>
+                          <div class="image-info">
+                            <div class="image-name">{{ image }}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="副本信息" width="160" align="center">
+                    <template #default="{ row }">
+                      <div class="replicas-info">
+                        <div class="replica-item">
+                          <span class="replica-label">期望</span>
+                          <span class="replica-value">{{ row.spec?.replicas || 0 }}</span>
+                        </div>
+                        <div class="replica-divider"></div>
+                        <div class="replica-item">
+                          <span class="replica-label">就绪</span>
+                          <span class="replica-value ready">{{ row.status?.availableReplicas || 0 }}</span>
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="创建时间" width="180">
+                    <template #default="{ row }">
+                      <div class="time-cell">
+                        <el-icon class="time-icon"><Clock /></el-icon>
+                        <span class="time-text">{{ formatAgeShort(row.metadata?.creationTimestamp) }}</span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="120" align="center">
+                    <template #default="{ row }">
+                      <div class="status-cell-enhanced">
+                        <el-icon :class="`status-dot status-${getReplicaSetStatusType(row)}`">
+                          <component :is="getStatusDotIcon(getReplicaSetStatusType(row))" />
+                        </el-icon>
+                        <span :class="`status-text-enhanced status-${getReplicaSetStatusType(row)}`">
+                          {{ getReplicaSetStatusText(row) }}
+                        </span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="200" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <div class="action-buttons">
+                        <el-button
+                          type="primary"
+                          size="small"
+                          plain
+                          @click="handleViewReplicaSetYAML(row)"
+                          class="action-btn view-btn"
+                        >
+                          <el-icon><Document /></el-icon>
+                          <span>详情</span>
+                        </el-button>
+                        <el-button
+                          v-if="!isCurrentReplicaSet(row)"
+                          type="warning"
+                          size="small"
+                          plain
+                          @click="handleRollback(row)"
+                          class="action-btn rollback-btn"
+                        >
+                          <el-icon><RefreshLeft /></el-icon>
+                          <span>回滚</span>
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+              <el-empty v-else description="暂无历史版本" :image-size="120" />
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="detailDialogVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <!-- 工作负载编辑对话框 -->
     <el-dialog
       v-model="editDialogVisible"
-      title="编辑工作负载"
+      :title="isCreateMode ? '创建工作负载' : '编辑工作负载'"
       width="90%"
       :close-on-click-modal="false"
       class="workload-edit-dialog"
+      @close="isCreateMode = false"
     >
       <div class="workload-edit-content" v-if="editWorkloadData">
         <!-- 左侧：基础信息 -->
         <div class="edit-sidebar">
           <BasicInfo
             :formData="editWorkloadData"
+            :isCreateMode="isCreateMode"
+            :namespaceList="namespaceList"
             @add-label="handleAddLabel"
             @remove-label="handleRemoveLabel"
             @add-annotation="handleAddAnnotation"
@@ -350,7 +863,22 @@
                 />
               </div>
             </el-tab-pane>
-            <el-tab-pane label="调度" name="scheduling">
+            <el-tab-pane label="扩容配置" name="scaling">
+              <div class="tab-content scaling-tab-content">
+                <ScalingConfig
+                  :workloadType="editWorkloadData.type"
+                  :formData="editWorkloadData"
+                  :scalingStrategy="scalingStrategyData"
+                  :jobConfig="jobConfig"
+                  :cronJobConfig="cronJobConfig"
+                  @update:formData="handleUpdateFormData"
+                  @update:scalingStrategy="handleUpdateScalingStrategy"
+                  @update:jobConfig="updateJobConfig"
+                  @update:cronJobConfig="updateCronJobConfig"
+                />
+              </div>
+            </el-tab-pane>
+            <el-tab-pane label="节点调度" name="scheduling">
               <div class="tab-content scheduling-tab-content">
                 <!-- 调度类型 -->
                 <div class="info-panel">
@@ -366,20 +894,6 @@
                       @addMatchRule="handleAddMatchRule"
                       @removeMatchRule="handleRemoveMatchRule"
                       @update="handleUpdateScheduling"
-                    />
-                  </div>
-                </div>
-
-                <!-- 更新策略 -->
-                <div class="info-panel">
-                  <div class="panel-header">
-                    <span class="panel-icon">🔄</span>
-                    <span class="panel-title">更新策略</span>
-                  </div>
-                  <div class="panel-content">
-                    <ScalingStrategy
-                      :formData="scalingStrategyData"
-                      @update="handleUpdateScalingStrategy"
                     />
                   </div>
                 </div>
@@ -445,13 +959,156 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 终端对话框 -->
+    <el-dialog
+      v-model="terminalDialogVisible"
+      :title="`终端 - Pod: ${terminalData.pod} | 容器: ${terminalData.container}`"
+      width="90%"
+      :close-on-click-modal="false"
+      class="terminal-dialog"
+      @close="handleCloseTerminal"
+      @opened="handleDialogOpened"
+    >
+      <div class="terminal-container">
+        <div v-if="!terminalConnected" class="terminal-loading-overlay">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>正在连接终端...</span>
+        </div>
+        <div class="terminal-wrapper" ref="terminalWrapper"></div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="terminalDialogVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 日志对话框 -->
+    <el-dialog
+      v-model="logsDialogVisible"
+      :title="`日志 - Pod: ${logsData.pod} | 容器: ${logsData.container}`"
+      width="90%"
+      :close-on-click-modal="false"
+      class="logs-dialog"
+    >
+      <div class="logs-toolbar">
+        <el-button size="small" @click="handleRefreshLogs" :loading="logsLoading">
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </el-button>
+        <el-button size="small" @click="handleDownloadLogs">
+          <el-icon><Download /></el-icon>
+          下载
+        </el-button>
+        <el-button size="small" @click="logsAutoScroll = !logsAutoScroll" :type="logsAutoScroll ? 'primary' : 'default'">
+          <el-icon><Bottom /></el-icon>
+          {{ logsAutoScroll ? '自动滚动' : '停止滚动' }}
+        </el-button>
+        <el-select v-model="logsTailLines" size="small" style="width: 120px; margin-left: 10px;">
+          <el-option label="最近100行" :value="100" />
+          <el-option label="最近500行" :value="500" />
+          <el-option label="最近1000行" :value="1000" />
+          <el-option label="全部" :value="0" />
+        </el-select>
+      </div>
+      <div class="logs-wrapper" ref="logsWrapper">
+        <pre v-if="logsContent" class="logs-content">{{ logsContent }}</pre>
+        <el-empty v-else-if="!logsLoading" description="暂无日志" />
+        <div v-if="logsLoading" class="logs-loading">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>正在加载日志...</span>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="logsDialogVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- ReplicaSet YAML 对话框 -->
+    <el-dialog
+      v-model="replicaSetYamlDialogVisible"
+      :title="`ReplicaSet YAML - ${replicaSetYamlData.name}`"
+      width="900px"
+      :close-on-click-modal="false"
+      class="yaml-dialog"
+    >
+      <div class="yaml-dialog-content">
+        <div class="yaml-editor-wrapper">
+          <div class="yaml-line-numbers">
+            <div v-for="line in replicaSetYamlLineCount" :key="line" class="line-number">{{ line }}</div>
+          </div>
+          <textarea
+            v-model="replicaSetYamlContent"
+            class="yaml-textarea"
+            placeholder="YAML 内容"
+            spellcheck="false"
+            readonly
+          ></textarea>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="handleCopyReplicaSetYAML">
+            <el-icon><CopyDocument /></el-icon>
+            复制
+          </el-button>
+          <el-button type="primary" @click="replicaSetYamlDialogVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 创建工作负载弹窗 -->
+    <el-dialog
+      v-model="createWorkloadDialogVisible"
+      :title="`YAML创建${selectedType || ''}`"
+      width="800px"
+      :close-on-click-modal="false"
+      class="create-workload-dialog"
+    >
+      <div class="yaml-create-mode">
+        <div class="yaml-editor-container">
+          <div class="yaml-editor-wrapper">
+            <div class="yaml-line-numbers">
+              <div v-for="line in createYamlLineCount" :key="line" class="line-number">{{ line }}</div>
+            </div>
+            <textarea
+              v-model="createYamlContent"
+              class="yaml-textarea"
+              placeholder="请输入或修改 YAML 内容..."
+              spellcheck="false"
+            ></textarea>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="createWorkloadDialogVisible = false">取消</el-button>
+          <el-button
+            type="primary"
+            :loading="createYamlLoading"
+            @click="handleCreateFromYaml"
+          >
+            创建
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, onMounted, computed, nextTick, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+import * as yaml from 'js-yaml'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
 import {
   Search,
   Tools,
@@ -466,16 +1123,33 @@ import {
   Document,
   Monitor,
   RefreshRight,
+  RefreshLeft,
   Rank,
   Delete,
-  CopyDocument
+  CopyDocument,
+  Box,
+  ArrowDown,
+  MoreFilled,
+  Loading,
+  Download,
+  Bottom,
+  Connection,
+  Right,
+  Link,
+  Guide,
+  CircleCheck,
+  CircleClose,
+  Warning,
+  VideoPause,
+  VideoPlay,
+  Plus
 } from '@element-plus/icons-vue'
 import { getClusterList, updateWorkload, type Cluster } from '@/api/kubernetes'
 // 导入工作负载编辑组件
 import BasicInfo from './workload-components/BasicInfo.vue'
 import ContainerConfig from './workload-components/ContainerConfig.vue'
+import ScalingConfig from './workload-components/ScalingConfig.vue'
 import NodeSelector from './workload-components/spec/NodeSelector.vue'
-import ScalingStrategy from './workload-components/spec/ScalingStrategy.vue'
 import Affinity from './workload-components/spec/Affinity.vue'
 import Tolerations from './workload-components/spec/Tolerations.vue'
 import Network from './workload-components/spec/Network.vue'
@@ -511,8 +1185,18 @@ const selectedNamespace = ref<string>('')
 const selectedCluster = computed(() => {
   return clusterList.value.find(c => c.id === selectedClusterId.value)
 })
-const selectedType = ref<string>('')
+const selectedType = ref<string>('Deployment') // 默认选择 Deployment
 const workloadList = ref<Workload[]>([])
+
+// 工作负载类型配置
+const workloadTypes = ref([
+  { label: 'Deployment', value: 'Deployment', icon: 'Box', count: 0 },
+  { label: 'StatefulSet', value: 'StatefulSet', icon: 'Rank', count: 0 },
+  { label: 'DaemonSet', value: 'DaemonSet', icon: 'Connection', count: 0 },
+  { label: 'Job', value: 'Job', icon: 'Guide', count: 0 },
+  { label: 'CronJob', value: 'CronJob', icon: 'Clock', count: 0 },
+  { label: 'Pod', value: 'Pod', icon: 'Box', count: 0 }
+])
 
 // 搜索条件
 const searchName = ref('')
@@ -532,11 +1216,210 @@ const yamlSaving = ref(false)
 const selectedWorkload = ref<Workload | null>(null)
 const yamlTextarea = ref<HTMLTextAreaElement | null>(null)
 
+// 工作负载详情弹窗
+const detailDialogVisible = ref(false)
+const detailData = ref<any>(null)
+const activeDetailTab = ref('pods')
+
 // 工作负载编辑弹窗
 const editDialogVisible = ref(false)
 const editSaving = ref(false)
 const editWorkloadData = ref<any>(null)
 const activeEditTab = ref('containers')
+const isCreateMode = ref(false) // 区分创建模式还是编辑模式
+
+// 终端弹窗
+const terminalDialogVisible = ref(false)
+const terminalConnected = ref(false)
+const terminalData = ref({
+  pod: '',
+  container: '',
+  namespace: ''
+})
+const terminalWrapper = ref<HTMLDivElement | null>(null)
+let terminalWebSocket: WebSocket | null = null
+let terminal: any = null
+
+// 日志弹窗
+const logsDialogVisible = ref(false)
+const logsContent = ref('')
+const logsLoading = ref(false)
+const logsData = ref({
+  pod: '',
+  container: '',
+  namespace: ''
+})
+const logsWrapper = ref<HTMLDivElement | null>(null)
+const logsAutoScroll = ref(true)
+const logsTailLines = ref(500)
+
+// 暂停状态
+const isWorkloadPaused = ref(false)
+const pauseLoading = ref(false)
+
+// ReplicaSet YAML 弹窗
+const replicaSetYamlDialogVisible = ref(false)
+const replicaSetYamlContent = ref('')
+const replicaSetYamlData = ref({
+  name: '',
+  namespace: ''
+})
+
+// 创建工作负载弹窗
+const createWorkloadDialogVisible = ref(false)
+const selectedWorkloadType = ref('Deployment')
+const createYamlContent = ref('')
+const createYamlLoading = ref(false)
+
+// 工作负载类型模板
+const workloadTemplates: Record<string, string> = {
+  Deployment: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21.0
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi`,
+
+  StatefulSet: `apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nginx-statefulset
+  namespace: default
+spec:
+  serviceName: nginx-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21.0
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: www
+          mountPath: /usr/share/nginx/html
+  volumeClaimTemplates:
+  - metadata:
+      name: www
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi`,
+
+  DaemonSet: `apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd-daemonset
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: fluentd
+  template:
+    metadata:
+      labels:
+        app: fluentd
+    spec:
+      containers:
+      - name: fluentd
+        image: fluentd:v1.14.0
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi`,
+
+  Job: `apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pi-job
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: pi
+        image: perl:5.34.0
+        command: ["perl", "-Mbignum=bpi", "-wle", "print bpi(2000)"]
+      restartPolicy: Never
+  backoffLimit: 4`,
+
+  CronJob: `apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hello-cronjob
+  namespace: default
+spec:
+  schedule: "*/1 * * * *"
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: hello
+            image: busybox:1.36
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/sh
+            - -c
+            - date; echo Hello from the Kubernetes cluster
+          restartPolicy: OnFailure`,
+
+  Pod: `apiVersion: v1
+kind: Pod
+metadata:
+  name: debug
+  namespace: default
+spec:
+  containers:
+    - name: debug
+      image: nicolaka/netshoot
+      command:
+        - /bin/sh
+      args:
+        - '-c'
+        - sleep 100000
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi`
+}
 
 // 亲和性规则
 const affinityRules = ref<any[]>([])
@@ -552,8 +1435,25 @@ const scalingStrategyData = ref<any>({
   maxUnavailable: '25%',
   minReadySeconds: 0,
   progressDeadlineSeconds: 600,
-  revisionHistoryLimit: 10,
-  timeoutSeconds: 600
+})
+
+// CronJob 配置
+const cronJobConfig = ref<any>({
+  schedule: '0 * * * *',
+  concurrencyPolicy: 'Allow',
+  timeZone: '',
+  successfulJobsHistoryLimit: 3,
+  failedJobsHistoryLimit: 1,
+  startingDeadlineSeconds: null,
+  suspend: false,
+})
+
+// Job 配置
+const jobConfig = ref<any>({
+  completions: 1,
+  parallelism: 1,
+  backoffLimit: 6,
+  activeDeadlineSeconds: null,
 })
 
 // 过滤后的工作负载列表
@@ -580,6 +1480,12 @@ const paginatedWorkloadList = computed(() => {
 const yamlLineCount = computed(() => {
   if (!yamlContent.value) return 1
   return yamlContent.value.split('\n').length
+})
+
+// 计算ReplicaSet YAML行数
+const replicaSetYamlLineCount = computed(() => {
+  if (!replicaSetYamlContent.value) return 1
+  return replicaSetYamlContent.value.split('\n').length
 })
 
 // 获取类型图标
@@ -748,7 +1654,8 @@ const handleClusterChange = async () => {
 }
 
 // 切换工作负载类型
-const handleTypeChange = () => {
+const handleTypeChange = (type: string) => {
+  selectedType.value = type
   currentPage.value = 1
   loadWorkloads()
 }
@@ -783,6 +1690,164 @@ const handleSearch = () => {
   loadWorkloads()
 }
 
+// YAML创建工作负载
+const handleAddWorkloadYAML = () => {
+  console.log('🔍 handleAddWorkloadYAML called')
+  console.log('🔍 selectedClusterId:', selectedClusterId.value)
+  console.log('🔍 selectedType:', selectedType.value)
+
+  if (!selectedClusterId.value && clusterList.value.length > 0) {
+    // 如果没有选择集群但有集群列表，自动选择第一个
+    selectedClusterId.value = clusterList.value[0].id
+    console.log('🔍 Auto-selected first cluster:', selectedClusterId.value)
+  }
+
+  if (!selectedClusterId.value) {
+    ElMessage.warning('请先选择集群')
+    return
+  }
+
+  // 使用当前选择的工作负载类型
+  const workloadType = selectedType.value || 'Deployment'
+
+  // 重置状态
+  selectedWorkloadType.value = workloadType
+  createYamlContent.value = workloadTemplates[workloadType] || workloadTemplates.Deployment
+  createWorkloadDialogVisible.value = true
+  console.log('🔍 Creating', workloadType, 'createWorkloadDialogVisible set to true')
+}
+
+// 表单创建工作负载
+const handleAddWorkloadForm = async () => {
+  console.log('🔍 handleAddWorkloadForm called')
+  console.log('🔍 selectedClusterId:', selectedClusterId.value)
+  console.log('🔍 selectedType:', selectedType.value)
+
+  if (!selectedClusterId.value && clusterList.value.length > 0) {
+    // 如果没有选择集群但有集群列表，自动选择第一个
+    selectedClusterId.value = clusterList.value[0].id
+    console.log('🔍 Auto-selected first cluster:', selectedClusterId.value)
+  }
+
+  if (!selectedClusterId.value) {
+    ElMessage.warning('请先选择集群')
+    return
+  }
+
+  // 使用当前选择的工作负载类型
+  const workloadType = selectedType.value || 'Deployment'
+
+  // 初始化空的表单数据
+  isCreateMode.value = true
+
+  // 初始化扩缩容策略数据
+  scalingStrategyData.value = {
+    strategyType: 'RollingUpdate',
+    maxSurge: '25%',
+    maxUnavailable: '25%',
+    minReadySeconds: 0,
+    progressDeadlineSeconds: 600
+  }
+
+  // 初始化 CronJob 配置（仅当类型为 CronJob 时使用）
+  cronJobConfig.value = {
+    schedule: '0 * * * *',
+    concurrencyPolicy: 'Allow',
+    timeZone: '',
+    successfulJobsHistoryLimit: 3,
+    failedJobsHistoryLimit: 1,
+    startingDeadlineSeconds: null,
+    suspend: false,
+  }
+
+  // 初始化 Job 配置（仅当类型为 Job 或 CronJob 时使用）
+  jobConfig.value = {
+    completions: 1,
+    parallelism: 1,
+    backoffLimit: 6,
+    activeDeadlineSeconds: null,
+  }
+
+  // 初始化亲和性规则为空
+  affinityRules.value = []
+
+  // 初始化工作负载数据
+  editWorkloadData.value = {
+    name: '',
+    namespace: selectedNamespace.value || 'default',
+    type: workloadType,
+    labels: [{ key: 'app', value: '' }],
+    annotations: [],
+    replicas: 1,
+    schedule: workloadType === 'CronJob' ? '0 * * * *' : undefined,
+    containers: [],
+    initContainers: [],
+    volumes: [],
+    nodeSelector: {},
+    affinity: {},
+    tolerations: [],
+    strategy: {
+      type: 'RollingUpdate',
+      rollingUpdate: {
+        maxUnavailable: '25%',
+        maxSurge: '25%'
+      }
+    },
+    hostNetwork: false,
+    dnsPolicy: 'ClusterFirst',
+    hostname: '',
+    subdomain: '',
+    dnsConfig: {
+      nameservers: [],
+      searches: [],
+      options: []
+    }
+  }
+
+  console.log('🔍 Loading nodes...')
+  // 加载节点列表
+  await loadNodes()
+
+  activeEditTab.value = 'containers'
+  editDialogVisible.value = true
+  console.log('🔍 editDialogVisible set to true, creating', workloadType)
+}
+
+// 创建工作负载（YAML方式）
+const handleCreateFromYaml = async () => {
+  if (!createYamlContent.value.trim()) {
+    ElMessage.warning('请输入YAML内容')
+    return
+  }
+
+  createYamlLoading.value = true
+  try {
+    const token = localStorage.getItem('token')
+    await axios.post(
+      `/api/v1/plugins/kubernetes/resources/workloads/create`,
+      {
+        clusterId: selectedClusterId.value,
+        yaml: createYamlContent.value
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    ElMessage.success('创建成功')
+    createWorkloadDialogVisible.value = false
+    loadWorkloads()
+  } catch (error: any) {
+    console.error(error)
+    const errorMsg = error.response?.data?.message || '创建工作负载失败'
+    ElMessage.error(errorMsg)
+  } finally {
+    createYamlLoading.value = false
+  }
+}
+
+// 计算YAML行数
+const createYamlLineCount = computed(() => {
+  return createYamlContent.value.split('\n').length
+})
+
 // 加载工作负载列表
 const loadWorkloads = async () => {
   if (!selectedClusterId.value) return
@@ -791,7 +1856,7 @@ const loadWorkloads = async () => {
   try {
     const token = localStorage.getItem('token')
     const params: any = { clusterId: selectedClusterId.value }
-    if (selectedType.value) params.type = selectedType.value
+    // 不传 type 参数，获取所有类型的工作负载
     if (selectedNamespace.value) params.namespace = selectedNamespace.value
 
     const response = await axios.get(
@@ -801,7 +1866,17 @@ const loadWorkloads = async () => {
         headers: { Authorization: `Bearer ${token}` }
       }
     )
-    workloadList.value = response.data.data || []
+    const allWorkloads = response.data.data || []
+
+    // 根据选中的类型过滤
+    if (selectedType.value) {
+      workloadList.value = allWorkloads.filter((w: Workload) => w.type === selectedType.value)
+    } else {
+      workloadList.value = allWorkloads
+    }
+
+    // 更新每个类型的数量
+    updateWorkloadTypeCounts(allWorkloads)
   } catch (error) {
     console.error(error)
     workloadList.value = []
@@ -809,6 +1884,28 @@ const loadWorkloads = async () => {
   } finally {
     loading.value = false
   }
+}
+
+// 更新工作负载类型的数量统计
+const updateWorkloadTypeCounts = (allWorkloads: Workload[]) => {
+  const typeCounts: Record<string, number> = {
+    'Deployment': 0,
+    'StatefulSet': 0,
+    'DaemonSet': 0,
+    'Job': 0,
+    'CronJob': 0,
+    'Pod': 0
+  }
+
+  allWorkloads.forEach((w: Workload) => {
+    if (typeCounts[w.type] !== undefined) {
+      typeCounts[w.type]++
+    }
+  })
+
+  workloadTypes.value.forEach(type => {
+    type.count = typeCounts[type.value] || 0
+  })
 }
 
 // 处理下拉菜单命令
@@ -913,6 +2010,13 @@ const handleUpdateScheduling = (data: { schedulingType: string; specifiedNode: s
   console.log('🔍 完整的 editWorkloadData.value:', editWorkloadData.value)
 }
 
+// 更新表单数据
+const handleUpdateFormData = (data: any) => {
+  if (editWorkloadData.value) {
+    Object.assign(editWorkloadData.value, data)
+  }
+}
+
 // 更新扩缩容策略
 const handleUpdateScalingStrategy = (data: any) => {
   if (editWorkloadData.value) {
@@ -924,6 +2028,1013 @@ const handleUpdateScalingStrategy = (data: any) => {
     editWorkloadData.value.revisionHistoryLimit = data.revisionHistoryLimit
     editWorkloadData.value.timeoutSeconds = data.timeoutSeconds
   }
+  scalingStrategyData.value = { ...data }
+}
+
+// 更新 CronJob 配置
+const updateCronJobConfig = (data: any) => {
+  cronJobConfig.value = { ...data }
+}
+
+// 更新 Job 配置
+const updateJobConfig = (data: any) => {
+  jobConfig.value = { ...data }
+}
+
+// 显示工作负载详情
+const handleShowDetail = async (workload: Workload) => {
+  try {
+    const token = localStorage.getItem('token')
+    const clusterId = selectedClusterId.value
+
+    // 并行获取所有数据
+    const [workloadRes, replicaSetsRes, podsRes, servicesRes, ingressesRes] = await Promise.all([
+      axios.get(`/api/v1/plugins/kubernetes/resources/workloads/${workload.namespace}/${workload.name}`, {
+        params: { clusterId, type: workload.type },
+        headers: { Authorization: `Bearer ${token}` }
+      }),
+      axios.get(`/api/v1/plugins/kubernetes/resources/workloads/${workload.namespace}/${workload.name}/replicasets`, {
+        params: { clusterId },
+        headers: { Authorization: `Bearer ${token}` }
+      }),
+      axios.get(`/api/v1/plugins/kubernetes/resources/workloads/${workload.namespace}/${workload.name}/pods`, {
+        params: { clusterId, type: workload.type },
+        headers: { Authorization: `Bearer ${token}` }
+      }),
+      axios.get(`/api/v1/plugins/kubernetes/resources/workloads/${workload.namespace}/${workload.name}/services`, {
+        params: { clusterId },
+        headers: { Authorization: `Bearer ${token}` }
+      }),
+      axios.get(`/api/v1/plugins/kubernetes/resources/workloads/${workload.namespace}/${workload.name}/ingresses`, {
+        params: { clusterId },
+        headers: { Authorization: `Bearer ${token}` }
+      })
+    ])
+
+    // 获取 Pods metrics
+    try {
+      const metricsRes = await axios.get(`/api/v1/plugins/kubernetes/resources/pods/metrics`, {
+        params: { clusterId, namespace: workload.namespace },
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      podMetricsData.value = metricsRes.data.data.metrics || {}
+    } catch (metricsError) {
+      console.warn('获取 Pod metrics 失败:', metricsError)
+      podMetricsData.value = {}
+    }
+
+    // 提取工作负载对象
+    const workloadObj = workloadRes.data.data.items?.[0]
+
+    // 整理详情数据
+    detailData.value = {
+      name: workload.name,
+      namespace: workload.namespace,
+      type: workload.type,
+      workload: workloadObj,
+      replicaSets: replicaSetsRes.data.data.items || [],
+      pods: podsRes.data.data.items || [],
+      services: servicesRes.data.data.items || [],
+      ingresses: ingressesRes.data.data.items || []
+    }
+
+    console.log('📦 详情数据:', detailData.value)
+    console.log('📦 Pods数据:', detailData.value.pods)
+    console.log('📦 Pods数量:', detailData.value.pods.length)
+    console.log('📦 workloadObj:', workloadObj)
+    console.log('📦 workloadObj.spec?.paused:', workloadObj.spec?.paused)
+
+    // 更新暂停状态
+    isWorkloadPaused.value = !!workloadObj.spec?.paused
+    console.log('📦 isWorkloadPaused:', isWorkloadPaused.value)
+
+    // 如果是 CronJob，加载 CronJob 配置
+    if (workload.type === 'CronJob' && workloadObj.spec) {
+      cronJobConfig.value = {
+        schedule: workloadObj.spec.schedule || '0 * * * *',
+        concurrencyPolicy: workloadObj.spec.concurrencyPolicy || 'Allow',
+        timeZone: workloadObj.spec.timeZone || '',
+        successfulJobsHistoryLimit: workloadObj.spec.successfulJobsHistoryLimit || 3,
+        failedJobsHistoryLimit: workloadObj.spec.failedJobsHistoryLimit || 1,
+        startingDeadlineSeconds: workloadObj.spec.startingDeadlineSeconds || null,
+        suspend: workloadObj.spec.suspend || false,
+      }
+      console.log('📦 CronJob 配置:', cronJobConfig.value)
+
+      // 加载 CronJob 的 Job 配置
+      const jobSpec = workloadObj.spec.jobTemplate?.spec
+      if (jobSpec) {
+        jobConfig.value = {
+          completions: jobSpec.completions || 1,
+          parallelism: jobSpec.parallelism || 1,
+          backoffLimit: jobSpec.backoffLimit || 6,
+          activeDeadlineSeconds: jobSpec.activeDeadlineSeconds || null,
+        }
+        console.log('📦 CronJob 的 Job 配置:', jobConfig.value)
+      }
+    }
+
+    // 如果是 Job，加载 Job 配置
+    if (workload.type === 'Job' && workloadObj.spec) {
+      jobConfig.value = {
+        completions: workloadObj.spec.completions || 1,
+        parallelism: workloadObj.spec.parallelism || 1,
+        backoffLimit: workloadObj.spec.backoffLimit || 6,
+        activeDeadlineSeconds: workloadObj.spec.activeDeadlineSeconds || null,
+      }
+      console.log('📦 Job 配置:', jobConfig.value)
+    }
+
+    activeDetailTab.value = 'pods'
+    detailDialogVisible.value = true
+  } catch (error: any) {
+    console.error('获取工作负载详情失败:', error)
+    ElMessage.error('获取工作负载详情失败')
+  }
+}
+
+// 格式化年龄显示（短格式）
+const formatAgeShort = (timestamp: string) => {
+  if (!timestamp) return '-'
+  const now = new Date()
+  const created = new Date(timestamp)
+  const diff = now.getTime() - created.getTime()
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+
+  if (days > 0) {
+    return `${days}d${hours}h`
+  } else if (hours > 0) {
+    return `${hours}h${minutes}m`
+  } else {
+    return `${minutes}m`
+  }
+}
+
+// 获取Pod的就绪容器数
+const getReadyContainers = (pod: any) => {
+  if (!pod.status?.containerStatuses) return '0'
+  const ready = pod.status.containerStatuses.filter((cs: any) => cs.ready).length
+  return ready
+}
+
+// 获取Pod的重启次数
+const getRestartCount = (pod: any) => {
+  if (!pod.status?.containerStatuses) return 0
+  return pod.status.containerStatuses.reduce((sum: number, cs: any) => sum + (cs.restartCount || 0), 0)
+}
+
+// 获取Pod状态对应的标签类型
+const getPodStatusType = (status: string) => {
+  const statusMap: Record<string, string> = {
+    'Running': 'success',
+    'Pending': 'warning',
+    'Failed': 'danger',
+    'Succeeded': 'info',
+    'Unknown': 'info'
+  }
+  return statusMap[status] || 'info'
+}
+
+// 清理状态文本，去除多余的标点符号
+const getPodStatusText = (status: string | undefined) => {
+  if (!status) return '-'
+  // 去除所有结尾的标点符号（包括中文和英文）
+  let cleaned = status.trim()
+  // 持续去除结尾的标点符号，直到没有为止
+  while (cleaned && /[.,，。、;；:：！!？?]/.test(cleaned.slice(-1))) {
+    cleaned = cleaned.slice(0, -1)
+  }
+  return cleaned || '-'
+}
+
+// 计算资源年龄
+const calculateAge = (creationTimestamp: string | undefined) => {
+  if (!creationTimestamp) return '-'
+  const now = new Date()
+  const created = new Date(creationTimestamp)
+  const diff = now.getTime() - created.getTime()
+
+  const seconds = Math.floor(diff / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) {
+    return `${days}天`
+  } else if (hours > 0) {
+    return `${hours}小时`
+  } else if (minutes > 0) {
+    return `${minutes}分钟`
+  } else {
+    return `${seconds}秒`
+  }
+}
+
+// 获取Service类型颜色
+const getServiceTypeColor = (type: string | undefined) => {
+  const colorMap: Record<string, string> = {
+    'ClusterIP': 'info',
+    'NodePort': 'success',
+    'LoadBalancer': 'warning',
+    'ExternalName': 'danger'
+  }
+  return colorMap[type || ''] || 'info'
+}
+
+// 获取Ingress域名列表（computed）
+const ingressHosts = computed(() => {
+  if (!detailData.value?.ingresses || !Array.isArray(detailData.value.ingresses)) {
+    return []
+  }
+
+  const hostMap: Record<string, string[]> = {}
+
+  detailData.value.ingresses.forEach((ingress: any) => {
+    if (ingress.spec?.rules) {
+      ingress.spec.rules.forEach((rule: any) => {
+        if (rule.host) {
+          if (!hostMap[rule.host]) {
+            hostMap[rule.host] = []
+          }
+          hostMap[rule.host].push(ingress.metadata?.name || '')
+        }
+      })
+    }
+  })
+
+  return Object.keys(hostMap).map(host => ({
+    host,
+    names: hostMap[host]
+  }))
+})
+
+// 获取Ingress路由规则列表（computed）
+const ingressRules = computed(() => {
+  if (!detailData.value?.ingresses || !Array.isArray(detailData.value.ingresses)) {
+    return []
+  }
+
+  const rules: any[] = []
+
+  detailData.value.ingresses.forEach((ingress: any) => {
+    const ingressName = ingress.metadata?.name || ''
+
+    if (ingress.spec?.rules) {
+      ingress.spec.rules.forEach((rule: any) => {
+        const host = rule.host || '-'
+
+        if (rule.http?.paths) {
+          rule.http.paths.forEach((path: any) => {
+            rules.push({
+              ingressName,
+              host,
+              path: path.path || '/',
+              pathType: path.pathType || 'Prefix',
+              serviceName: path.backend?.service?.name || '-',
+              servicePort: path.backend?.service?.port?.number || path.backend?.service?.port?.name || '-'
+            })
+          })
+        }
+      })
+    }
+  })
+
+  return rules
+})
+
+// 排序后的 ReplicaSet 列表（computed）
+const sortedReplicaSets = computed(() => {
+  if (!detailData.value?.replicaSets || !Array.isArray(detailData.value.replicaSets)) {
+    return []
+  }
+
+  // 复制数组并排序
+  return [...detailData.value.replicaSets].sort((a: any, b: any) => {
+    const revisionA = getReplicaSetRevision(a)
+    const revisionB = getReplicaSetRevision(b)
+
+    // 如果都是数字，按数字降序排序（最新版本在前）
+    const numA = parseInt(revisionA)
+    const numB = parseInt(revisionB)
+
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return numB - numA
+    }
+
+    // 如果不是数字，按字符串降序排序
+    return revisionB.localeCompare(revisionA)
+  })
+})
+
+// 工作负载类型（computed）
+const workloadType = computed(() => {
+  if (!detailData.value?.type) return '-'
+  const typeMap: Record<string, string> = {
+    'Deployment': 'Deployment',
+    'StatefulSet': 'StatefulSet',
+    'DaemonSet': 'DaemonSet',
+    'ReplicaSet': 'ReplicaSet'
+  }
+  return typeMap[detailData.value.type] || detailData.value.type
+})
+
+// 处理暂停状态变化
+const handlePauseChange = async (value: boolean) => {
+  if (!detailData.value?.workload) return
+
+  pauseLoading.value = true
+  try {
+    const token = localStorage.getItem('token')
+    const clusterId = selectedClusterId.value
+    const namespace = detailData.value.namespace
+    const name = detailData.value.name
+    const type = detailData.value.type
+
+    // 调用后端API更新暂停状态
+    await axios.post(
+      `/api/v1/plugins/kubernetes/workloads/pause`,
+      {
+        clusterId,
+        namespace,
+        name,
+        type,
+        paused: value
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+
+    ElMessage.success(value ? '工作负载已暂停' : '工作负载已恢复运行')
+
+    // 保存当前标签页
+    const currentTab = activeDetailTab.value
+
+    // 刷新详情
+    await handleShowDetail({
+      namespace,
+      name,
+      type
+    } as Workload)
+
+    // 恢复标签页
+    activeDetailTab.value = currentTab
+  } catch (error: any) {
+    console.error('更新暂停状态失败:', error)
+    ElMessage.error('更新暂停状态失败: ' + (error.response?.data?.message || error.message))
+    // 恢复开关状态
+    isWorkloadPaused.value = !value
+  } finally {
+    pauseLoading.value = false
+  }
+}
+
+// 获取 ReplicaSet 版本号
+const getReplicaSetRevision = (replicaSet: any) => {
+  const annotations = replicaSet.metadata?.annotations || {}
+  const revision = annotations['deployment.kubernetes.io/revision']
+  return revision || '-'
+}
+
+// 获取 ReplicaSet 镜像列表
+const getReplicaSetImages = (replicaSet: any) => {
+  const containers = replicaSet.spec?.template?.spec?.containers || []
+  return containers.map((c: any) => {
+    const image = c.image || ''
+    // 只保留镜像名和tag，去掉registry部分
+    const parts = image.split('/')
+    const nameAndTag = parts[parts.length - 1]
+    return nameAndTag
+  })
+}
+
+// 获取 ReplicaSet 状态类型
+const getReplicaSetStatusType = (replicaSet: any) => {
+  const replicas = replicaSet.spec?.replicas || 0
+  const availableReplicas = replicaSet.status?.availableReplicas || 0
+
+  if (replicas === 0) return 'info'
+  if (availableReplicas === replicas) return 'success'
+  if (availableReplicas > 0) return 'warning'
+  return 'danger'
+}
+
+// 获取 ReplicaSet 状态文本
+const getReplicaSetStatusText = (replicaSet: any) => {
+  const replicas = replicaSet.spec?.replicas || 0
+  const availableReplicas = replicaSet.status?.availableReplicas || 0
+
+  if (replicas === 0) return '已停止'
+  if (availableReplicas === replicas) return '运行中'
+  if (availableReplicas > 0) return `${availableReplicas}/${replicas} 就绪`
+  return '未就绪'
+}
+
+// 判断是否为当前版本的 ReplicaSet
+const isCurrentReplicaSet = (replicaSet: any) => {
+  if (!detailData.value?.workload) return false
+  const workload = detailData.value.workload
+
+  // 对于 Deployment，检查当前 ReplicaSet 是否匹配
+  if (workload.status?.currentReplicas) {
+    // 通过 annotations 中的 revision 判断
+    const currentRevision = workload.metadata?.annotations?.['deployment.kubernetes.io/revision']
+    const replicaSetRevision = replicaSet.metadata?.annotations?.['deployment.kubernetes.io/revision']
+    return currentRevision === replicaSetRevision
+  }
+
+  return false
+}
+
+// 获取状态点图标
+const getStatusDotIcon = (statusType: string) => {
+  const iconMap: Record<string, any> = {
+    'success': CircleCheck,
+    'warning': Warning,
+    'danger': CircleClose,
+    'info': CircleCheck,
+    'primary': CircleCheck
+  }
+  return iconMap[statusType] || CircleCheck
+}
+
+// 查看 ReplicaSet YAML
+const handleViewReplicaSetYAML = async (replicaSet: any) => {
+  try {
+    const token = localStorage.getItem('token')
+    const clusterId = selectedClusterId.value
+    const namespace = replicaSet.metadata?.namespace
+    const name = replicaSet.metadata?.name
+
+    // 直接将 ReplicaSet 对象转换为 YAML
+    replicaSetYamlContent.value = yaml.dump(replicaSet, {
+      lineWidth: -1,
+      noRefs: true,
+      sortKeys: false
+    })
+
+    replicaSetYamlData.value = {
+      name,
+      namespace
+    }
+    replicaSetYamlDialogVisible.value = true
+  } catch (error: any) {
+    console.error('获取 ReplicaSet YAML 失败:', error)
+    ElMessage.error('获取 ReplicaSet YAML 失败')
+  }
+}
+
+// 复制 ReplicaSet YAML
+const handleCopyReplicaSetYAML = async () => {
+  try {
+    await navigator.clipboard.writeText(replicaSetYamlContent.value)
+    ElMessage.success('YAML 已复制到剪贴板')
+  } catch (error: any) {
+    console.error('复制失败:', error)
+    ElMessage.error('复制失败')
+  }
+}
+
+// 回滚到指定版本
+const handleRollback = async (replicaSet: any) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要回滚到版本 #${getReplicaSetRevision(replicaSet)} 吗？此操作将创建一个新的 ReplicaSet 并更新工作负载。`,
+      '回滚确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const token = localStorage.getItem('token')
+    const clusterId = selectedClusterId.value
+    const namespace = detailData.value.namespace
+    const name = detailData.value.name
+    const type = detailData.value.type
+
+    // 调用后端回滚API
+    await axios.post(
+      `/api/v1/plugins/kubernetes/workloads/rollback`,
+      {
+        clusterId,
+        namespace,
+        name,
+        type,
+        revision: getReplicaSetRevision(replicaSet)
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+
+    ElMessage.success('回滚成功')
+
+    // 保存当前标签页
+    const currentTab = activeDetailTab.value
+
+    // 刷新详情
+    await handleShowDetail({
+      namespace,
+      name,
+      type
+    } as Workload)
+
+    // 恢复标签页
+    activeDetailTab.value = currentTab
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('回滚失败:', error)
+      ElMessage.error('回滚失败: ' + (error.response?.data?.message || error.message))
+    }
+  }
+}
+
+// 获取运行时信息
+const getRuntimeInfo = () => {
+  if (!detailData.value?.workload || !detailData.value?.pods) {
+    return []
+  }
+
+  const workload = detailData.value.workload
+  const pods = detailData.value.pods
+  const now = new Date()
+
+  const info: any[] = []
+
+  // Pod 状态
+  const runningPods = pods.filter((p: any) => p.status?.phase === 'Running')
+  const pendingPods = pods.filter((p: any) => p.status?.phase === 'Pending')
+  const failedPods = pods.filter((p: any) => !['Running', 'Succeeded'].includes(p.status?.phase))
+
+  info.push({
+    category: 'Pod 状态',
+    icon: 'Box',
+    iconClass: 'icon-pod',
+    status: runningPods.length === pods.length ? '正常' : '异常',
+    statusIcon: runningPods.length === pods.length ? 'CircleCheck' : 'Warning',
+    statusType: runningPods.length === pods.length ? 'success' : 'warning',
+    isLoading: false,
+    message: `总计 ${pods.length} 个 Pod：运行中 ${runningPods.length} 个，等待中 ${pendingPods.length} 个，失败 ${failedPods.length} 个`,
+    lastUpdate: calculateAge(workload.metadata?.creationTimestamp)
+  })
+
+  // 副本状态
+  const specReplicas = workload.spec?.replicas || 0
+  const statusReplicas = workload.status?.replicas || 0
+  const updatedReplicas = workload.status?.updatedReplicas || 0
+  const availableReplicas = workload.status?.availableReplicas || 0
+  const readyReplicas = workload.status?.readyReplicas || 0
+
+  const replicasHealthy = specReplicas === availableReplicas && specReplicas === readyReplicas
+
+  info.push({
+    category: '副本状态',
+    icon: 'CopyDocument',
+    iconClass: 'icon-replica',
+    status: replicasHealthy ? '正常' : '更新中',
+    statusIcon: replicasHealthy ? 'CircleCheck' : 'Loading',
+    statusType: replicasHealthy ? 'success' : 'primary',
+    isLoading: !replicasHealthy,
+    message: `期望 ${specReplicas} 个，当前 ${statusReplicas} 个，可用 ${availableReplicas} 个，就绪 ${readyReplicas} 个，已更新 ${updatedReplicas} 个`,
+    lastUpdate: calculateAge(workload.status?.conditions?.find((c: any) => c.type === 'Progressing')?.lastTransitionTime)
+  })
+
+  // 更新状态
+  const progressingCondition = workload.status?.conditions?.find((c: any) => c.type === 'Progressing')
+  const availableCondition = workload.status?.conditions?.find((c: any) => c.type === 'Available')
+
+  info.push({
+    category: '更新状态',
+    icon: 'Refresh',
+    iconClass: 'icon-update',
+    status: progressingCondition?.status === 'True' ? '进行中' : '已完成',
+    statusIcon: progressingCondition?.status === 'True' ? 'Loading' : 'CircleCheck',
+    statusType: progressingCondition?.status === 'True' ? 'primary' : 'success',
+    isLoading: progressingCondition?.status === 'True',
+    message: progressingCondition?.message || '副本集更新正常',
+    lastUpdate: calculateAge(progressingCondition?.lastTransitionTime)
+  })
+
+  // 可用性状态
+  info.push({
+    category: '可用性',
+    icon: 'CircleCheck',
+    iconClass: 'icon-available',
+    status: availableCondition?.status === 'True' ? '可用' : '不可用',
+    statusIcon: availableCondition?.status === 'True' ? 'CircleCheck' : 'CircleClose',
+    statusType: availableCondition?.status === 'True' ? 'success' : 'danger',
+    isLoading: false,
+    message: availableCondition?.message || '工作负载可用性检查',
+    lastUpdate: calculateAge(availableCondition?.lastTransitionTime)
+  })
+
+  // 暂停状态
+  const isPaused = workload.spec?.paused
+
+  if (isPaused !== undefined) {
+    info.push({
+      category: '暂停状态',
+      icon: 'VideoPause',
+      iconClass: 'icon-paused',
+      status: isPaused ? '已暂停' : '运行中',
+      statusIcon: isPaused ? 'VideoPause' : 'VideoPlay',
+      statusType: isPaused ? 'info' : 'success',
+      isLoading: false,
+      message: isPaused ? '工作负载更新已暂停，不会创建新的副本' : '工作负载正常运行，会自动更新副本',
+      lastUpdate: '-'
+    })
+  }
+
+  // 碰撞状态
+  const collisionCount = workload.status?.collisionCount || 0
+
+  if (collisionCount > 0) {
+    info.push({
+      category: '冲突计数',
+      icon: 'Warning',
+      iconClass: 'icon-collision',
+      status: '有冲突',
+      statusIcon: 'Warning',
+      statusType: 'warning',
+      isLoading: false,
+      message: `检测到 ${collisionCount} 次更新冲突，可能有并发更新问题`,
+      lastUpdate: calculateAge(workload.metadata?.creationTimestamp)
+    })
+  }
+
+  // 观察者状态
+  if (workload.status?.observedGeneration) {
+    const observedGeneration = workload.status.observedGeneration
+    const generation = workload.metadata?.generation || 0
+
+    info.push({
+      category: '观察者',
+      icon: 'View',
+      iconClass: 'icon-observer',
+      status: observedGeneration === generation ? '同步' : '滞后',
+      statusIcon: observedGeneration === generation ? 'CircleCheck' : 'Clock',
+      statusType: observedGeneration === generation ? 'success' : 'warning',
+      isLoading: false,
+      message: `当前代数 ${generation}，已观察到代数 ${observedGeneration}${observedGeneration < generation ? '，控制器正在处理最新配置' : ''}`,
+      lastUpdate: calculateAge(workload.metadata?.creationTimestamp)
+    })
+  }
+
+  return info
+}
+
+// 获取容器镜像列表（返回数组）
+const getContainerImageList = (workload: any) => {
+  if (!workload?.spec?.template?.spec?.containers) return []
+  return workload.spec.template.spec.containers.map((c: any) => c.image).filter((img: string) => img)
+}
+
+// 获取容器镜像列表（逗号分隔）
+const getContainerImages = (workload: any) => {
+  const images = getContainerImageList(workload)
+  return images.length > 0 ? images.join(', ') : '-'
+}
+
+// 获取 Pod CPU 使用率
+// Pod metrics 数据
+const podMetricsData = ref<Record<string, { cpu: number, memory: number, cpuStr: string, memoryStr: string }>>({})
+
+// 获取 Pod CPU 使用量（从 metrics 数据）
+const getPodCPU = (pod: any) => {
+  const podName = pod.metadata?.name
+  const metrics = podMetricsData.value[podName]
+
+  if (metrics && metrics.cpu > 0) {
+    return metrics.cpuStr
+  }
+
+  // 如果没有 metrics，显示 requests 值
+  const cpuRequests = pod.spec?.containers?.reduce((sum: number, c: any) => {
+    const cpu = c.resources?.requests?.cpu
+    if (cpu) {
+      if (cpu.endsWith('m')) {
+        return sum + parseInt(cpu)
+      }
+      return sum + parseInt(cpu) * 1000
+    }
+    return sum
+  }, 0) || 0
+
+  if (cpuRequests > 0) {
+    if (cpuRequests >= 1000) {
+      return `${(cpuRequests / 1000).toFixed(1)} Core (req)`
+    }
+    return `${cpuRequests}m (req)`
+  }
+  return '-'
+}
+
+// 获取 Pod 内存使用量（从 metrics 数据）
+const getPodMemory = (pod: any) => {
+  const podName = pod.metadata?.name
+  const metrics = podMetricsData.value[podName]
+
+  if (metrics && metrics.memory > 0) {
+    return metrics.memoryStr
+  }
+
+  // 如果没有 metrics，显示 requests 值
+  const memoryRequests = pod.spec?.containers?.reduce((sum: number, c: any) => {
+    const mem = c.resources?.requests?.memory
+    if (mem) {
+      if (mem.endsWith('Mi')) {
+        return sum + parseInt(mem)
+      }
+      if (mem.endsWith('Gi')) {
+        return sum + parseInt(mem) * 1024
+      }
+    }
+    return sum
+  }, 0) || 0
+
+  if (memoryRequests > 0) {
+    if (memoryRequests >= 1024) {
+      return `${(memoryRequests / 1024).toFixed(1)} Gi (req)`
+    }
+    return `${memoryRequests} Mi (req)`
+  }
+  return '-'
+}
+
+// 处理 Pod 操作
+const handlePodAction = (command: any, pod: any) => {
+  const { action, container, pod: podName } = command
+  const namespace = pod.metadata?.namespace
+
+  if (action === 'terminal') {
+    handleOpenTerminal(podName, container, namespace)
+  } else if (action === 'logs') {
+    handleOpenLogs(podName, container, namespace)
+  }
+}
+
+// 打开终端
+const handleOpenTerminal = async (podName: string, containerName: string, namespace: string) => {
+  terminalData.value = {
+    pod: podName,
+    container: containerName,
+    namespace
+  }
+  terminalConnected.value = false
+  terminalDialogVisible.value = true
+  // 不在这里初始化终端，而是在对话框完全打开后通过 @opened 事件初始化
+}
+
+// 对话框完全打开后的回调
+const handleDialogOpened = async () => {
+  await nextTick()
+  await initTerminal()
+}
+
+// 初始化终端
+const initTerminal = async () => {
+  console.log('🔍 initTerminal 被调用')
+  console.log('🔍 terminalWrapper.value:', terminalWrapper.value)
+
+  // 等待 DOM 元素准备好，最多重试 10 次
+  let retries = 0
+  while (!terminalWrapper.value && retries < 10) {
+    console.log(`⏳ 等待 terminalWrapper 准备好... (${retries + 1}/10)`)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    retries++
+  }
+
+  if (!terminalWrapper.value) {
+    console.error('❌ terminalWrapper 仍然为 null，无法初始化终端')
+    return
+  }
+
+  console.log('✅ terminalWrapper 已准备好，开始初始化终端')
+
+  // 清空容器
+  terminalWrapper.value.innerHTML = ''
+
+  // 创建终端实例
+  terminal = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    theme: {
+      background: '#1e1e1e',
+      foreground: '#d4d4d4',
+      cursor: '#d4d4d4',
+      black: '#000000',
+      red: '#cd3131',
+      green: '#0dbc79',
+      yellow: '#e5e510',
+      blue: '#2472c8',
+      magenta: '#bc3fbc',
+      cyan: '#11a8cd',
+      white: '#e5e5e5',
+      brightBlack: '#666666',
+      brightRed: '#f14c4c',
+      brightGreen: '#23d18b',
+      brightYellow: '#f5f543',
+      brightBlue: '#3b8eea',
+      brightMagenta: '#d670d6',
+      brightCyan: '#29b8db',
+      brightWhite: '#ffffff'
+    }
+  })
+
+  // 加载插件
+  const fitAddon = new FitAddon()
+  const webLinksAddon = new WebLinksAddon()
+  terminal.loadAddon(fitAddon)
+  terminal.loadAddon(webLinksAddon)
+
+  // 打开终端
+  terminal.open(terminalWrapper.value)
+  fitAddon.fit()
+
+  // 欢迎信息
+  terminal.writeln('\x1b[1;32m正在连接到容器...\x1b[0m')
+
+  // 获取token
+  const token = localStorage.getItem('token')
+  const clusterId = selectedClusterId.value
+
+  console.log('🔍 终端连接参数:', {
+    clusterId,
+    namespace: terminalData.value.namespace,
+    pod: terminalData.value.pod,
+    container: terminalData.value.container
+  })
+
+  // 构建WebSocket URL
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.hostname
+  const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '9876')
+  const wsUrl = `${protocol}//${host}:${port}/api/v1/plugins/kubernetes/shell/pods?` +
+    `clusterId=${clusterId}&` +
+    `namespace=${terminalData.value.namespace}&` +
+    `podName=${terminalData.value.pod}&` +
+    `container=${terminalData.value.container}&` +
+    `token=${token}`
+
+  console.log('🔍 WebSocket URL:', wsUrl)
+
+  try {
+    // 建立WebSocket连接
+    terminalWebSocket = new WebSocket(wsUrl)
+
+    terminalWebSocket.onopen = () => {
+      console.log('✅ WebSocket 已连接')
+      terminalConnected.value = true
+      terminal.clear()
+      terminal.writeln('\x1b[1;32m✓ 已连接到容器 ' + terminalData.value.container + '\x1b[0m')
+      terminal.writeln('')
+    }
+
+    terminalWebSocket.onmessage = (event) => {
+      terminal.write(event.data)
+    }
+
+    terminalWebSocket.onerror = (error) => {
+      console.error('❌ WebSocket错误:', error)
+      terminal.writeln('\x1b[1;31m✗ 连接错误\x1b[0m')
+      terminal.writeln('请检查:')
+      terminal.writeln('1. 集群连接是否正常')
+      terminal.writeln('2. Pod是否正在运行')
+      terminal.writeln('3. 浏览器控制台是否有错误信息')
+    }
+
+    terminalWebSocket.onclose = (event) => {
+      console.log('🔌 WebSocket 已关闭:', event.code, event.reason)
+      terminalConnected.value = false
+      terminal.writeln('\x1b[1;33m连接已关闭\x1b[0m')
+    }
+
+    // 处理用户输入
+    terminal.onData((data: string) => {
+      if (terminalWebSocket && terminalWebSocket.readyState === WebSocket.OPEN) {
+        terminalWebSocket.send(data)
+      }
+    })
+
+    // 处理窗口大小变化
+    terminal.onResize(({ cols, rows }) => {
+      if (terminalWebSocket && terminalWebSocket.readyState === WebSocket.OPEN) {
+        terminalWebSocket.send(JSON.stringify({ type: 'resize', cols, rows }))
+      }
+    })
+
+  } catch (error: any) {
+    console.error('❌ 创建终端失败:', error)
+    terminal.writeln('\x1b[1;31m✗ 连接失败: ' + error.message + '\x1b[0m')
+  }
+}
+
+// 关闭终端
+const handleCloseTerminal = () => {
+  if (terminalWebSocket) {
+    terminalWebSocket.close()
+    terminalWebSocket = null
+  }
+  if (terminal) {
+    terminal.dispose()
+    terminal = null
+  }
+  terminalConnected.value = false
+}
+
+// 打开日志
+const handleOpenLogs = async (podName: string, containerName: string, namespace: string) => {
+  logsData.value = {
+    pod: podName,
+    container: containerName,
+    namespace
+  }
+  logsContent.value = ''
+  logsDialogVisible.value = true
+  await handleLoadLogs()
+}
+
+// 加载日志
+const handleLoadLogs = async () => {
+  logsLoading.value = true
+  try {
+    const token = localStorage.getItem('token')
+    const clusterId = selectedClusterId.value
+    const { pod, container, namespace } = logsData.value
+
+    const response = await axios.get('/api/v1/plugins/kubernetes/resources/pods/logs', {
+      params: {
+        clusterId,
+        namespace,
+        podName: pod,
+        container,
+        tailLines: logsTailLines.value
+      },
+      headers: { Authorization: `Bearer ${token}` }
+    })
+
+    logsContent.value = response.data.data?.logs || ''
+
+    // 自动滚动到底部
+    if (logsAutoScroll.value) {
+      nextTick(() => {
+        if (logsWrapper.value) {
+          logsWrapper.value.scrollTop = logsWrapper.value.scrollHeight
+        }
+      })
+    }
+  } catch (error: any) {
+    console.error('获取日志失败:', error)
+    ElMessage.error(`获取日志失败: ${error.response?.data?.message || error.message}`)
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+// 刷新日志
+const handleRefreshLogs = () => {
+  handleLoadLogs()
+}
+
+// 下载日志
+const handleDownloadLogs = () => {
+  const { pod, container } = logsData.value
+  const blob = new Blob([logsContent.value], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${pod}-${container}-${new Date().getTime()}.log`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+  ElMessage.success('日志下载成功')
+}
+
+// 监听日志内容变化，自动滚动到底部
+watch(logsContent, () => {
+  if (logsAutoScroll.value && logsWrapper.value) {
+    nextTick(() => {
+      if (logsWrapper.value) {
+        logsWrapper.value.scrollTop = logsWrapper.value.scrollHeight
+      }
+    })
+  }
+})
+
+// 获取注解提示内容
+const getAnnotationsTooltip = (annotations: Record<string, string>) => {
+  return Object.entries(annotations).map(([k, v]) => `${k}: ${v}`).join('\n')
+}
+
+// 获取注解文本（只显示一行）
+const getAnnotationsText = (annotations: Record<string, string>) => {
+  const text = Object.entries(annotations).map(([k, v]) => `${k}: ${v}`).join(', ')
+  if (text.length > 80) {
+    return text.substring(0, 77) + '...'
+  }
+  return text
 }
 
 // 显示 YAML 编辑器
@@ -936,16 +3047,28 @@ const handleShowYAML = async () => {
     const clusterId = selectedClusterId.value
     const name = selectedWorkload.value.name
     const namespace = selectedWorkload.value.namespace
+    const type = selectedWorkload.value.type
 
     const response = await axios.get(
       `/api/v1/plugins/kubernetes/resources/workloads/${namespace}/${name}/yaml`,
       {
-        params: { clusterId },
+        params: { clusterId, type },
         headers: { Authorization: `Bearer ${token}` }
       }
     )
 
-    yamlContent.value = response.data.data?.yaml || ''
+    // 后端返回的是 JSON 对象，需要转换为 YAML 字符串
+    const jsonData = response.data.data?.items
+    if (jsonData) {
+      yamlContent.value = yaml.dump(jsonData, {
+        indent: 2,
+        lineWidth: -1,
+        noRefs: true
+      })
+    } else {
+      yamlContent.value = ''
+    }
+
     yamlDialogVisible.value = true
   } catch (error: any) {
     console.error('获取 YAML 失败:', error)
@@ -965,11 +3088,13 @@ const handleSaveYAML = async () => {
     const clusterId = selectedClusterId.value
     const name = selectedWorkload.value.name
     const namespace = selectedWorkload.value.namespace
+    const type = selectedWorkload.value.type
 
     await axios.put(
       `/api/v1/plugins/kubernetes/resources/workloads/${namespace}/${name}/yaml`,
       {
         clusterId,
+        type,
         yaml: yamlContent.value
       },
       {
@@ -1162,6 +3287,7 @@ const handleShowEditDialog = async () => {
         namespace: workloadData.metadata?.namespace || namespace,
         type: workloadData.kind || workloadType,
         replicas: workloadData.spec?.replicas || 0,
+        schedule: workloadData.spec?.schedule || undefined,  // CronJob 调度规则
         labels: objectToKeyValueArray(workloadData.metadata?.labels || {}),
         annotations: objectToKeyValueArray(workloadData.metadata?.annotations || {}),
         nodeSelector: nodeSelector,
@@ -1194,18 +3320,56 @@ const handleShowEditDialog = async () => {
       const rollingParams = strategy.rollingUpdate || {}
       scalingStrategyData.value = {
         strategyType: strategy.type || 'RollingUpdate',
-        maxSurge: rollingParams.maxSurge || '25%',
-        maxUnavailable: rollingParams.maxUnavailable || '25%',
-        minReadySeconds: workloadData.spec?.minReadySeconds || 0,
-        progressDeadlineSeconds: workloadData.spec?.progressDeadlineSeconds || 600,
-        revisionHistoryLimit: workloadData.spec?.revisionHistoryLimit || 10,
+        maxSurge: rollingParams.maxSurge !== undefined ? rollingParams.maxSurge : '25%',
+        maxUnavailable: rollingParams.maxUnavailable !== undefined ? rollingParams.maxUnavailable : '25%',
+        minReadySeconds: workloadData.spec?.minReadySeconds ?? 0,
+        progressDeadlineSeconds: workloadData.spec?.progressDeadlineSeconds ?? 600,
+        revisionHistoryLimit: workloadData.spec?.revisionHistoryLimit ?? 10,
         timeoutSeconds: 600
       }
       console.log('🔍 解析扩缩容策略:', scalingStrategyData.value)
 
+      // 解析 Job 配置（Job 类型）
+      if (workloadType === 'Job' && workloadData.spec) {
+        jobConfig.value = {
+          completions: workloadData.spec.completions || 1,
+          parallelism: workloadData.spec.parallelism || 1,
+          backoffLimit: workloadData.spec.backoffLimit || 6,
+          activeDeadlineSeconds: workloadData.spec.activeDeadlineSeconds || null,
+        }
+        console.log('🔍 解析 Job 配置:', jobConfig.value)
+      }
+
+      // 解析 CronJob 配置（CronJob 类型）
+      if (workloadType === 'CronJob' && workloadData.spec) {
+        cronJobConfig.value = {
+          schedule: workloadData.spec.schedule || '0 * * * *',
+          concurrencyPolicy: workloadData.spec.concurrencyPolicy || 'Allow',
+          timeZone: workloadData.spec.timeZone || '',
+          successfulJobsHistoryLimit: workloadData.spec.successfulJobsHistoryLimit || 3,
+          failedJobsHistoryLimit: workloadData.spec.failedJobsHistoryLimit || 1,
+          startingDeadlineSeconds: workloadData.spec.startingDeadlineSeconds || null,
+          suspend: workloadData.spec.suspend || false,
+        }
+        console.log('🔍 解析 CronJob 配置:', cronJobConfig.value)
+
+        // 解析 CronJob 的 Job 配置
+        const jobSpec = workloadData.spec.jobTemplate?.spec
+        if (jobSpec) {
+          jobConfig.value = {
+            completions: jobSpec.completions || 1,
+            parallelism: jobSpec.parallelism || 1,
+            backoffLimit: jobSpec.backoffLimit || 6,
+            activeDeadlineSeconds: jobSpec.activeDeadlineSeconds || null,
+          }
+          console.log('🔍 解析 CronJob 的 Job 配置:', jobConfig.value)
+        }
+      }
+
       // 加载节点列表
       await loadNodes()
 
+      isCreateMode.value = false
       editDialogVisible.value = true
     } else {
       ElMessage.warning('未获取到工作负载数据')
@@ -1646,9 +3810,8 @@ const convertToKubernetesYaml = (data: any, cluster: string, namespace: string):
     podSpec.affinity = affinity
   }
 
-  if (tolerations.length > 0) {
-    podSpec.tolerations = tolerations
-  }
+  // 总是设置 tolerations，包括空数组，以确保删除旧的容忍度
+  podSpec.tolerations = tolerations
 
   // 明确删除 Pod 级别的 securityContext（包括 sysctls 等可能导致问题的配置）
   // 通过设置为 null 来确保删除旧配置
@@ -1711,42 +3874,6 @@ const convertToKubernetesYaml = (data: any, cluster: string, namespace: string):
   console.log('🔍 构建的 podSpec:', JSON.stringify(podSpec, null, 2))
   console.log('🔍 podSpec.affinity:', podSpec.affinity)
 
-  // 构建 Deployment spec
-  const deploymentSpec: any = {
-    replicas: data.replicas || 1,
-    selector: {
-      matchLabels: { app: labels.app || data.name }
-    },
-    template: podTemplate
-  }
-
-  // 添加扩缩容策略
-  if (data.strategyType) {
-    const strategy: any = {
-      type: data.strategyType
-    }
-
-    if (data.strategyType === 'RollingUpdate') {
-      strategy.rollingUpdate = {}
-      if (data.maxSurge) strategy.rollingUpdate.maxSurge = data.maxSurge
-      if (data.maxUnavailable) strategy.rollingUpdate.maxUnavailable = data.maxUnavailable
-    }
-
-    deploymentSpec.strategy = strategy
-  }
-
-  if (data.minReadySeconds) {
-    deploymentSpec.minReadySeconds = data.minReadySeconds
-  }
-
-  if (data.progressDeadlineSeconds) {
-    deploymentSpec.progressDeadlineSeconds = data.progressDeadlineSeconds
-  }
-
-  if (data.revisionHistoryLimit) {
-    deploymentSpec.revisionHistoryLimit = data.revisionHistoryLimit
-  }
-
   // 构建 metadata
   const metadata: any = {
     name: data.name,
@@ -1758,12 +3885,131 @@ const convertToKubernetesYaml = (data: any, cluster: string, namespace: string):
     metadata.annotations = annotations
   }
 
+  // 根据类型构建不同的 spec
+  let spec: any = {}
+
+  if (data.type === 'Deployment' || data.type === 'StatefulSet') {
+    // Deployment 或 StatefulSet spec
+    spec = {
+      replicas: data.replicas || 1,
+      selector: {
+        matchLabels: { app: labels.app || data.name }
+      },
+      template: podTemplate
+    }
+
+    // 添加扩缩容策略
+    if (data.strategyType) {
+      const strategy: any = {
+        type: data.strategyType
+      }
+
+      if (data.strategyType === 'RollingUpdate') {
+        strategy.rollingUpdate = {}
+        if (data.maxSurge) strategy.rollingUpdate.maxSurge = data.maxSurge
+        if (data.maxUnavailable) strategy.rollingUpdate.maxUnavailable = data.maxUnavailable
+      }
+
+      spec.strategy = strategy
+    }
+
+    if (data.minReadySeconds) {
+      spec.minReadySeconds = data.minReadySeconds
+    }
+
+    if (data.progressDeadlineSeconds) {
+      spec.progressDeadlineSeconds = data.progressDeadlineSeconds
+    }
+
+    if (data.revisionHistoryLimit) {
+      spec.revisionHistoryLimit = data.revisionHistoryLimit
+    }
+
+    if (data.type === 'StatefulSet') {
+      // StatefulSet 特有字段
+      spec.serviceAccountName = podSpec.serviceAccountName || 'default'
+      delete podSpec.serviceAccountName
+    }
+  } else if (data.type === 'DaemonSet') {
+    // DaemonSet spec
+    spec = {
+      selector: {
+        matchLabels: { app: labels.app || data.name }
+      },
+      template: podTemplate
+    }
+  } else if (data.type === 'Job') {
+    // Job spec
+    spec = {
+      template: podTemplate
+    }
+
+    // 添加 Job 配置
+    if (jobConfig.value.completions) {
+      spec.completions = jobConfig.value.completions
+    }
+    if (jobConfig.value.parallelism) {
+      spec.parallelism = jobConfig.value.parallelism
+    }
+    if (jobConfig.value.backoffLimit !== undefined && jobConfig.value.backoffLimit !== null) {
+      spec.backoffLimit = jobConfig.value.backoffLimit
+    }
+    if (jobConfig.value.activeDeadlineSeconds) {
+      spec.activeDeadlineSeconds = jobConfig.value.activeDeadlineSeconds
+    }
+
+    // Job 默认不自动清理
+    spec.ttlSecondsAfterFinished = null
+  } else if (data.type === 'CronJob') {
+    // CronJob spec
+    const jobSpec: any = {
+      template: podTemplate
+    }
+
+    // 添加 Job 配置到 jobTemplate
+    if (jobConfig.value.completions) {
+      jobSpec.completions = jobConfig.value.completions
+    }
+    if (jobConfig.value.parallelism) {
+      jobSpec.parallelism = jobConfig.value.parallelism
+    }
+    if (jobConfig.value.backoffLimit !== undefined && jobConfig.value.backoffLimit !== null) {
+      jobSpec.backoffLimit = jobConfig.value.backoffLimit
+    }
+    if (jobConfig.value.activeDeadlineSeconds) {
+      jobSpec.activeDeadlineSeconds = jobConfig.value.activeDeadlineSeconds
+    }
+
+    spec = {
+      schedule: data.schedule || cronJobConfig.value.schedule,
+      concurrencyPolicy: cronJobConfig.value.concurrencyPolicy,
+      successfulJobsHistoryLimit: cronJobConfig.value.successfulJobsHistoryLimit,
+      failedJobsHistoryLimit: cronJobConfig.value.failedJobsHistoryLimit,
+      jobTemplate: {
+        spec: jobSpec
+      }
+    }
+
+    if (cronJobConfig.value.timeZone) {
+      spec.timeZone = cronJobConfig.value.timeZone
+    }
+    if (cronJobConfig.value.startingDeadlineSeconds) {
+      spec.startingDeadlineSeconds = cronJobConfig.value.startingDeadlineSeconds
+    }
+    if (cronJobConfig.value.suspend) {
+      spec.suspend = cronJobConfig.value.suspend
+    }
+  } else if (data.type === 'Pod') {
+    // Pod 直接使用 podTemplate 的 spec
+    spec = podSpec
+  }
+
   // 构建完整的资源对象
   const resource: any = {
     apiVersion,
     kind,
     metadata,
-    spec: deploymentSpec
+    spec
   }
 
   // 转换为 JSON 字符串
@@ -1771,6 +4017,7 @@ const convertToKubernetesYaml = (data: any, cluster: string, namespace: string):
   console.log('🔍 ====== 最终发送的 JSON ======')
   console.log('🔍 JSON 长度:', jsonStr.length)
   console.log('🔍 podSpec 部分:', JSON.stringify(podSpec, null, 2))
+  console.log('🔍 完整的 spec:', JSON.stringify(spec, null, 2))
 
   return jsonStr
 }
@@ -2166,7 +4413,10 @@ const buildPodAffinityTerm = (rule: any): any => {
 
 // 保存编辑
 const handleSaveEdit = async () => {
-  if (!editWorkloadData.value || !selectedWorkload.value) return
+  if (!editWorkloadData.value) return
+
+  // 创建模式下不需要selectedWorkload
+  if (!isCreateMode.value && !selectedWorkload.value) return
 
   editSaving.value = true
 
@@ -2178,22 +4428,38 @@ const handleSaveEdit = async () => {
       editWorkloadData.value.namespace || 'default'
     )
 
-    await updateWorkload({
-      cluster: clusterName,
-      namespace: editWorkloadData.value.namespace || 'default',
-      type: editWorkloadData.value.type,
-      name: editWorkloadData.value.name,
-      yaml
-    })
+    if (isCreateMode.value) {
+      // 创建模式：调用创建API
+      const token = localStorage.getItem('token')
+      await axios.post(
+        `/api/v1/plugins/kubernetes/resources/workloads/create`,
+        {
+          clusterId: selectedClusterId.value,
+          yaml: yaml
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      ElMessage.success('工作负载创建成功')
+      isCreateMode.value = false
+    } else {
+      // 编辑模式：调用更新API
+      await updateWorkload({
+        cluster: clusterName,
+        namespace: editWorkloadData.value.namespace || 'default',
+        type: editWorkloadData.value.type,
+        name: editWorkloadData.value.name,
+        yaml
+      })
+      ElMessage.success('工作负载更新成功')
+    }
 
-    ElMessage.success('工作负载更新成功')
     editDialogVisible.value = false
 
     // 重新加载列表
     await loadWorkloads()
   } catch (error: any) {
-    console.error('更新工作负载失败:', error)
-    ElMessage.error(error.response?.data?.message || '更新工作负载失败')
+    console.error(isCreateMode.value ? '创建工作负载失败:' : '更新工作负载失败:', error)
+    ElMessage.error(error.response?.data?.message || (isCreateMode.value ? '创建工作负载失败' : '更新工作负载失败'))
   } finally {
     editSaving.value = false
   }
@@ -2421,6 +4687,18 @@ const handleDelete = async () => {
   }
 }
 
+// 组件卸载时清理资源
+onUnmounted(() => {
+  if (terminalWebSocket) {
+    terminalWebSocket.close()
+    terminalWebSocket = null
+  }
+  if (terminal) {
+    terminal.dispose()
+    terminal = null
+  }
+})
+
 onMounted(() => {
   loadClusters()
 })
@@ -2498,6 +4776,174 @@ onMounted(() => {
 .black-button:hover {
   background: #c9a227 !important;
   box-shadow: 0 4px 12px rgba(212, 175, 55, 0.4);
+}
+
+/* 上下文选择栏 */
+.context-bar {
+  margin-bottom: 12px;
+  padding: 12px 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.context-selectors {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.context-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.context-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #606266;
+  white-space: nowrap;
+}
+
+.context-select {
+  min-width: 200px;
+}
+
+/* 工作负载类型标签栏 */
+.workload-types-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  flex-wrap: wrap;
+}
+
+.type-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #1a1a1a;
+  color: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  user-select: none;
+  border: 2px solid #1a1a1a;
+}
+
+.type-tab:hover {
+  background: #333;
+  border-color: #333;
+  transform: translateY(-1px);
+}
+
+.type-tab.active {
+  background: #d4af37;
+  color: #1a1a1a;
+  border-color: #d4af37;
+  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.4);
+  font-weight: 600;
+}
+
+.type-tab.active .type-icon {
+  color: #1a1a1a;
+}
+
+.type-icon {
+  font-size: 18px;
+  color: #fff;
+}
+
+.type-tab.active .type-icon {
+  color: #1a1a1a;
+}
+
+.type-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.type-count {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-left: 2px;
+}
+
+/* 操作栏 */
+.action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 12px 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.search-section {
+  flex: 1;
+  max-width: 400px;
+}
+
+.action-section {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+/* 创建按钮样式 */
+.add-button {
+  background: #1a1a1a !important;
+  color: #fff !important;
+  border: none !important;
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.add-button:hover {
+  background: #333 !important;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.add-button:active {
+  transform: translateY(0);
+}
+
+.add-button-form {
+  background: #1a1a1a !important;
+  color: #fff !important;
+  border: none !important;
+  font-weight: 500;
+  padding: 10px 20px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.add-button-form:hover {
+  background: #333 !important;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.add-button-form:active {
+  transform: translateY(0);
 }
 
 /* 搜索栏 */
@@ -2644,6 +5090,15 @@ onMounted(() => {
 
 .golden-text {
   color: #d4af37 !important;
+}
+
+.clickable {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.clickable:hover {
+  opacity: 0.7;
 }
 
 .workload-namespace {
@@ -2991,17 +5446,1432 @@ onMounted(() => {
   padding: 0;
 }
 
-.yaml-editor-wrapper {
+/* 详情对话框样式 */
+.detail-wrapper {
   display: flex;
-  border: 1px solid #e8e8e8;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.basic-info-section {
+  padding: 24px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
+  border-radius: 12px;
+  border: 1px solid #e4e7ed;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.info-row {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 20px;
+  align-items: flex-start;
+}
+
+.info-row:last-child {
+  margin-bottom: 0;
+}
+
+.basic-info-section .info-item {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.basic-info-section .info-item.full-width {
+  flex: 1;
+}
+
+.basic-info-section .info-label {
+  min-width: 80px;
+  font-size: 14px;
+  color: #606266;
+  font-weight: 600;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+.basic-info-section .info-value {
+  font-size: 14px;
+  color: #303133;
+  flex: 1;
+  line-height: 1.6;
+}
+
+/* 镜像列表样式 */
+.images-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.image-tag {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #e8f4fd 0%, #f5f9ff 100%);
+  border: 1px solid #b3d8ff;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #409eff;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  word-break: break-all;
+  transition: all 0.3s ease;
+}
+
+.image-tag:hover {
+  background: linear-gradient(135deg, #d9ecff 0%, #e8f4fd 100%);
+  border-color: #409eff;
+  box-shadow: 0 2px 6px rgba(64, 158, 255, 0.2);
+}
+
+/* 标签列表样式 */
+.labels-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1;
+}
+
+.labels-list .label-tag {
+  margin: 0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  background: linear-gradient(135deg, #f0f2f5 0%, #ffffff 100%);
+  border: 1px solid #dcdfe6;
+  color: #606266;
+  transition: all 0.3s ease;
+}
+
+.labels-list .label-tag:hover {
+  background: linear-gradient(135deg, #e8f4fd 0%, #f5f9ff 100%);
+  border-color: #409eff;
+  color: #409eff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(64, 158, 255, 0.2);
+}
+
+/* 注解样式 */
+.annotations-text {
+  max-width: 100%;
+  padding: 6px 12px;
+  background: #fafafa;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+  transition: all 0.3s ease;
+  display: inline-block;
+}
+
+.annotations-text:hover {
+  background: #f0f2f5;
+  border-color: #c0c4cc;
+}
+
+.basic-info-section .truncate-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-tabs {
+  margin-top: 0;
+}
+
+.tab-content {
+  padding: 16px;
+}
+
+/* Pods 表格样式 */
+.pods-table {
   border-radius: 8px;
   overflow: hidden;
-  background-color: #fafafa;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.pods-table :deep(.el-table__body-wrapper) {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.pods-table :deep(.el-table__header) {
+  background: linear-gradient(180deg, #f5f7fa 0%, #eef1f6 100%);
+}
+
+.pods-table :deep(.el-table__header th) {
+  background: transparent !important;
+  color: #1f2329;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 2px solid #e8eaed;
+}
+
+.pods-table :deep(.el-table__body tr) {
+  transition: all 0.3s ease;
+}
+
+.pods-table :deep(.el-table__body tr:hover) {
+  background: linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%) !important;
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
+}
+
+.pods-table :deep(.el-table__body tr td) {
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.pod-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pod-icon {
+  color: #409eff;
+  font-size: 16px;
+}
+
+.pod-name {
+  font-size: 14px;
+  color: #303133;
+  font-weight: 500;
+}
+
+.resource-value {
+  font-size: 13px;
+  color: #606266;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+/* 端口列表样式 */
+.ports-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.port-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.port-text {
+  font-size: 13px;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-weight: 500;
+}
+
+.name-cell {
+  display: flex;
+  align-items: center;
+}
+
+/* 服务表格样式 */
+.services-table {
+  font-size: 13px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.services-table :deep(.el-table__header) {
+  background: linear-gradient(180deg, #f5f7fa 0%, #eef1f6 100%);
+}
+
+.services-table :deep(.el-table__header th) {
+  background: transparent !important;
+  color: #1f2329;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 2px solid #e8eaed;
+}
+
+.services-table :deep(.el-table__body tr) {
+  transition: all 0.2s ease;
+}
+
+.services-table :deep(.el-table__body tr:hover) {
+  background: linear-gradient(90deg, #f5f7ff 0%, #ffffff 100%) !important;
+}
+
+.service-name-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.service-icon {
+  color: #409eff;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.service-name-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.ip-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.ip-text {
+  font-size: 13px;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ip-text.external-ip {
+  color: #67c23a;
+  font-weight: 600;
+}
+
+.more-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 18px;
+  color: #fff;
+  background-color: #909399;
+  border-radius: 9px;
+  margin-left: 4px;
+}
+
+.empty-text {
+  font-size: 13px;
+  color: #909399;
+}
+
+.ports-combined {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.port-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.port-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.port-number {
+  font-size: 14px;
+  font-weight: 600;
+  color: #409eff;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+.target-port {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+.port-arrow {
+  color: #909399;
+  font-size: 12px;
+}
+
+.nodeport-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #e6a23c;
+  background: linear-gradient(135deg, #fdf6ec 0%, #faecd8 100%);
+  border: 1px solid #f5dab1;
+  border-radius: 4px;
+}
+
+.port-name {
+  font-size: 11px;
+  color: #909399;
+  font-style: italic;
+  margin-left: 4px;
+}
+
+.age-text {
+  font-size: 13px;
+  color: #606266;
+}
+
+/* Ingress 样式 */
+.ingress-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ingress-hosts-section,
+.ingress-rules-section {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid #ebeef5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #f0f2f5;
+  position: relative;
+}
+
+.section-title::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 50px;
+  height: 2px;
+  background: linear-gradient(90deg, #409eff 0%, #66b1ff 100%);
+  border-radius: 2px;
+}
+
+.section-title .el-icon {
+  color: #409eff;
+  font-size: 18px;
+}
+
+.hosts-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 16px;
+}
+
+.host-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: linear-gradient(135deg, #f0f7ff 0%, #e8f4ff 100%);
+  border-radius: 8px;
+  border: 1px solid #d4e7ff;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.host-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: linear-gradient(180deg, #409eff 0%, #66b1ff 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.host-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.15);
+  border-color: #409eff;
+}
+
+.host-item:hover::before {
+  opacity: 1;
+}
+
+.host-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.host-icon {
+  color: #67c23a;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.host-text {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  color: #1f2329;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.host-ingress-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ingress-name-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #409eff;
+  background: #ffffff;
+  border: 1px solid #b3d8ff;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(64, 158, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.ingress-name-tag:hover {
+  background: #ecf5ff;
+  border-color: #409eff;
+  transform: scale(1.05);
+}
+
+.ingress-rules-table {
+  margin-top: 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ingress-rules-table :deep(.el-table__header) {
+  background: linear-gradient(180deg, #f5f7fa 0%, #eef1f6 100%);
+}
+
+.ingress-rules-table :deep(.el-table__header th) {
+  background: transparent !important;
+  color: #1f2329;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 2px solid #e8eaed;
+}
+
+.ingress-rules-table :deep(.el-table__body tr) {
+  transition: all 0.2s ease;
+}
+
+.ingress-rules-table :deep(.el-table__body tr:hover) {
+  background: linear-gradient(90deg, #f5f7ff 0%, #ffffff 100%) !important;
+  transform: scale(1.005);
+}
+
+.rule-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rule-icon {
+  color: #409eff;
+  font-size: 16px;
+}
+
+.rule-name-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.host-text-cell {
+  font-size: 13px;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-weight: 500;
+  background: linear-gradient(135deg, #f0f7ff 0%, #e8f4ff 100%);
+  padding: 4px 10px;
+  border-radius: 4px;
+  display: inline-block;
+  border: 1px solid #d4e7ff;
+}
+
+.path-text-simple {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  background: linear-gradient(135deg, #fff9e6 0%, #fff3d6 100%);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #ffe6a1;
+  display: inline-block;
+  cursor: help;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.path-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  background: linear-gradient(135deg, #fff9e6 0%, #fff3d6 100%);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #ffe6a1;
+  display: inline-block;
+}
+
+.service-name-cell {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409eff;
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #b3d8ff;
+  display: inline-block;
+}
+
+.port-number-cell {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6a23c;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  background: linear-gradient(135deg, #fef3e6 0%, #fde7d0 100%);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #fad295;
+  display: inline-block;
+  box-shadow: 0 1px 4px rgba(230, 162, 60, 0.1);
+}
+
+.restart-high {
+  color: #f56c6c;
+  font-weight: 600;
+}
+
+/* 下拉菜单样式 */
+.pods-table :deep(.el-dropdown-menu__item) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.pods-table :deep(.el-dropdown-menu__item .el-icon) {
+  color: #409eff;
+  font-size: 14px;
+}
+
+/* 运行时信息表格样式 */
+.runtime-content {
+  background: #fff;
+  border-radius: 8px;
+  padding: 0;
+}
+
+.runtime-table {
+  font-size: 13px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.runtime-table :deep(.el-table__header) {
+  background: linear-gradient(180deg, #f5f7fa 0%, #eef1f6 100%);
+}
+
+.runtime-table :deep(.el-table__header th) {
+  background: transparent !important;
+  color: #1f2329;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 2px solid #e8eaed;
+}
+
+.runtime-table :deep(.el-table__body tr) {
+  transition: all 0.2s ease;
+}
+
+.runtime-table :deep(.el-table__body tr:hover) {
+  background: linear-gradient(90deg, #f5f7ff 0%, #ffffff 100%) !important;
+}
+
+.runtime-table :deep(.el-table__body td) {
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.runtime-category {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.category-icon.icon-pod {
+  color: #409eff;
+}
+
+.category-icon.icon-replica {
+  color: #67c23a;
+}
+
+.category-icon.icon-update {
+  color: #e6a23c;
+}
+
+.category-icon.icon-available {
+  color: #67c23a;
+}
+
+.category-icon.icon-paused {
+  color: #909399;
+}
+
+.category-icon.icon-collision {
+  color: #f56c6c;
+}
+
+.category-icon.icon-observer {
+  color: #909399;
+}
+
+.category-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.status-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.status-indicator {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.status-indicator.status-success {
+  color: #67c23a;
+}
+
+.status-indicator.status-warning {
+  color: #e6a23c;
+}
+
+.status-indicator.status-danger {
+  color: #f56c6c;
+}
+
+.status-indicator.status-primary {
+  color: #409eff;
+}
+
+.status-indicator.status-info {
+  color: #909399;
+}
+
+.status-indicator.is-loading {
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-text {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.status-text.status-success {
+  color: #67c23a;
+}
+
+.status-text.status-warning {
+  color: #e6a23c;
+}
+
+.status-text.status-danger {
+  color: #f56c6c;
+}
+
+.status-text.status-primary {
+  color: #409eff;
+}
+
+.status-text.status-info {
+  color: #909399;
+}
+
+.message-cell {
+  display: flex;
+  align-items: center;
+}
+
+.message-text {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.time-text {
+  font-size: 13px;
+  color: #909399;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+/* 暂停页面样式 */
+.paused-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.paused-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 24px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+  border-radius: 12px;
+  border: 1px solid #e8eaed;
+}
+
+.paused-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+.paused-icon {
+  font-size: 40px;
+  color: #67c23a;
+  transition: all 0.3s ease;
+}
+
+.paused-icon.is-paused {
+  color: #f56c6c;
+}
+
+.paused-title {
+  flex: 1;
+}
+
+.paused-title h3 {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.paused-status-text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #67c23a;
+}
+
+.paused-status-text.paused {
+  color: #f56c6c;
+}
+
+.paused-control {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.paused-switch-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+  border-radius: 8px;
+}
+
+.switch-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.paused-description {
+  margin-top: 8px;
+}
+
+.paused-info {
+  background: #ffffff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.paused-info :deep(.el-descriptions__label) {
+  font-weight: 600;
+  background: #f5f7fa !important;
+}
+
+.paused-info :deep(.el-descriptions__content) {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+.container-group-header {
+  font-size: 12px;
+  color: #909399;
+  font-weight: 600;
+  padding: 4px 0;
+  border-bottom: 1px solid #e4e7ed;
+  margin-bottom: 4px;
+}
+
+/* 历史版本表格样式 */
+.revisions-content {
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.revisions-table {
+  font-size: 13px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.revisions-table :deep(.el-table__header) {
+  background: linear-gradient(180deg, #f5f7fa 0%, #eef1f6 100%);
+}
+
+.revisions-table :deep(.el-table__header th) {
+  background: transparent !important;
+  color: #1f2329;
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 2px solid #e8eaed;
+}
+
+.revisions-table :deep(.el-table__body tr) {
+  transition: all 0.2s ease;
+}
+
+.revisions-table :deep(.el-table__body tr:hover) {
+  background: linear-gradient(90deg, #f5f7ff 0%, #ffffff 100%) !important;
+}
+
+.revisions-table :deep(.el-table__body td) {
+  border-bottom: 1px solid #f0f2f5;
+}
+
+/* 版本单元格样式 */
+.revision-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.revision-number-wrapper {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.revision-icon {
+  font-size: 14px;
+  font-weight: 600;
+  color: #409eff;
+}
+
+.revision-number {
+  font-size: 16px;
+  font-weight: 700;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+.current-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+/* 镜像列样式增强 */
+.images-column-enhanced {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+  border-radius: 6px;
+  border: 1px solid #e4e7ed;
+  transition: all 0.2s ease;
+}
+
+.image-card:hover {
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  border-color: #b3d8ff;
+  transform: translateX(4px);
+}
+
+.image-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #409eff 0%, #66b1ff 100%);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.image-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.image-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 副本信息样式 */
+.replicas-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+  border-radius: 6px;
+}
+
+.replica-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.replica-label {
+  font-size: 11px;
+  color: #909399;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.replica-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+.replica-value.ready {
+  color: #67c23a;
+}
+
+.replica-divider {
+  width: 1px;
+  height: 30px;
+  background: #dcdfe6;
+}
+
+/* 时间单元格样式 */
+.time-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-icon {
+  color: #909399;
+  font-size: 14px;
+}
+
+/* 增强的状态单元格 */
+.status-cell-enhanced {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+}
+
+.status-dot {
+  font-size: 16px;
+}
+
+.status-dot.status-success {
+  color: #67c23a;
+}
+
+.status-dot.status-warning {
+  color: #e6a23c;
+}
+
+.status-dot.status-danger {
+  color: #f56c6c;
+}
+
+.status-dot.status-info {
+  color: #909399;
+}
+
+.status-text-enhanced {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status-text-enhanced.status-success {
+  color: #67c23a;
+}
+
+.status-text-enhanced.status-warning {
+  color: #e6a23c;
+}
+
+.status-text-enhanced.status-danger {
+  color: #f56c6c;
+}
+
+.status-text-enhanced.status-info {
+  color: #909399;
+}
+
+/* 操作按钮样式 */
+.action-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.view-btn {
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  border-color: #b3d8ff;
+  color: #409eff;
+}
+
+.view-btn:hover {
+  background: linear-gradient(135deg, #d9ecff 0%, #b3d8ff 100%);
+  border-color: #409eff;
+}
+
+.rollback-btn {
+  background: linear-gradient(135deg, #fef3e6 0%, #fde7d0 100%);
+  border-color: #fad295;
+  color: #e6a23c;
+}
+
+.rollback-btn:hover {
+  background: linear-gradient(135deg, #fde7d0 0%, #fbd6b6 100%);
+  border-color: #e6a23c;
+}
+
+/* 终端对话框样式 */
+.terminal-container {
+  position: relative;
+  width: 100%;
+  height: 600px;
+}
+
+.terminal-wrapper {
+  width: 100%;
+  height: 100%;
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.terminal-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #1e1e1e;
+  border-radius: 8px;
+  z-index: 10;
+  color: #409eff;
+  font-size: 16px;
+  gap: 12px;
+}
+
+.terminal-loading-overlay .el-icon {
+  font-size: 32px;
+}
+
+.terminal-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* 日志对话框样式 */
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.logs-wrapper {
+  width: 100%;
+  height: 500px;
+  overflow: auto;
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.logs-content {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d4af37;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.logs-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #409eff;
+  font-size: 16px;
+  gap: 16px;
+}
+
+.logs-loading .el-icon {
+  font-size: 32px;
+}
+
+.detail-content {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.detail-section {
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.detail-section:last-child {
+  border-bottom: none;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 16px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-item.full-width {
+  grid-column: 1 / -1;
+}
+
+.info-label {
+  font-size: 13px;
+  color: #909399;
+  font-weight: 500;
+}
+
+.info-value {
+  font-size: 14px;
+  color: #303133;
+}
+
+.tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-item {
+  margin: 0;
+}
+
+.annotations-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.annotation-item {
+  display: flex;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.annotation-key {
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
+  min-width: 200px;
+}
+
+.annotation-value {
+  font-size: 13px;
+  color: #909399;
+  word-break: break-all;
+}
+
+.images-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-item {
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+
+.image-name {
+  font-size: 13px;
+  color: #303133;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+}
+
+.image-in-cell, .port-in-cell {
+  font-size: 12px;
+  color: #606266;
+  padding: 2px 0;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+}
+
+.yaml-editor-wrapper {
+  display: flex;
+  border: 1px solid #333;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #000000;
 }
 
 .yaml-line-numbers {
-  background-color: #f5f5f5;
-  color: #999;
+  background-color: #0a0a0a;
+  color: #666;
   padding: 16px 8px;
   text-align: right;
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
@@ -3010,7 +6880,7 @@ onMounted(() => {
   user-select: none;
   overflow: hidden;
   min-width: 40px;
-  border-right: 1px solid #e8e8e8;
+  border-right: 1px solid #333;
 }
 
 .line-number {
@@ -3020,8 +6890,8 @@ onMounted(() => {
 
 .yaml-textarea {
   flex: 1;
-  background-color: #fafafa;
-  color: #333;
+  background-color: #000000;
+  color: #d4af37;
   border: none;
   outline: none;
   padding: 16px;
@@ -3033,12 +6903,11 @@ onMounted(() => {
 }
 
 .yaml-textarea::placeholder {
-  color: #aaa;
+  color: #555;
 }
 
 .yaml-textarea:focus {
   outline: none;
-  background-color: #ffffff;
 }
 
 /* 响应式设计 */
@@ -3236,13 +7105,6 @@ onMounted(() => {
 
 .edit-main :deep(.el-tabs__content)::-webkit-scrollbar-thumb:hover {
   background: #c9a227;
-}
-
-.tab-content {
-  padding: 0;
-  height: 100%;
-  overflow-y: auto;
-  background: #ffffff;
 }
 
 /* 调度页面样式 */
@@ -3528,6 +7390,30 @@ onMounted(() => {
 .edit-main :deep(.el-input-number__decrease:hover),
 .edit-main :deep(.el-input-number__increase:hover) {
   color: #c9a227;
+}
+
+/* 创建工作负载弹窗样式 */
+.yaml-create-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.yaml-editor-container {
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafbfc;
+}
+
+.yaml-create-mode .yaml-editor-wrapper {
+  max-height: 500px;
+  overflow: hidden;
+}
+
+.create-workload-dialog :deep(.el-dialog__footer) {
+  padding: 16px 20px;
+  border-top: 1px solid #ebeef5;
 }
 
 </style>
