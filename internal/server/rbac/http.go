@@ -14,6 +14,7 @@ type HTTPServer struct {
 	departmentService *rbacService.DepartmentService
 	menuService       *rbacService.MenuService
 	positionService   *rbacService.PositionService
+	captchaService    *rbacService.CaptchaService
 	authMiddleware    *rbacService.AuthMiddleware
 }
 
@@ -23,6 +24,7 @@ func NewHTTPServer(
 	departmentService *rbacService.DepartmentService,
 	menuService *rbacService.MenuService,
 	positionService *rbacService.PositionService,
+	captchaService *rbacService.CaptchaService,
 	authMiddleware *rbacService.AuthMiddleware,
 ) *HTTPServer {
 	return &HTTPServer{
@@ -31,6 +33,7 @@ func NewHTTPServer(
 		departmentService: departmentService,
 		menuService:       menuService,
 		positionService:   positionService,
+		captchaService:    captchaService,
 		authMiddleware:    authMiddleware,
 	}
 }
@@ -40,6 +43,13 @@ func (s *HTTPServer) RegisterRoutes(r *gin.Engine) {
 	public := r.Group("/api/v1/public")
 	{
 		public.POST("/login", s.userService.Login)
+	}
+
+	// 验证码路由（无需认证）
+	captcha := r.Group("/api/v1/captcha")
+	{
+		captcha.GET("", s.captchaService.GetCaptcha)
+		captcha.POST("/verify", s.captchaService.VerifyCaptcha)
 	}
 
 	// 需要认证的路由
@@ -59,6 +69,7 @@ func (s *HTTPServer) RegisterRoutes(r *gin.Engine) {
 			users.PUT("/:id", s.userService.UpdateUser)
 			users.DELETE("/:id", s.userService.DeleteUser)
 			users.POST("/:id/roles", s.userService.AssignUserRoles)
+			users.POST("/:id/positions", s.userService.AssignUserPositions)
 			users.PUT("/:id/reset-password", s.userService.ResetPassword)
 		}
 
@@ -118,6 +129,7 @@ func NewRBACServices(db *gorm.DB, jwtSecret string) (
 	*rbacService.DepartmentService,
 	*rbacService.MenuService,
 	*rbacService.PositionService,
+	*rbacService.CaptchaService,
 	*rbacService.AuthMiddleware,
 ) {
 	// 初始化Repository
@@ -141,7 +153,11 @@ func NewRBACServices(db *gorm.DB, jwtSecret string) (
 	departmentService := rbacService.NewDepartmentService(deptUseCase)
 	menuService := rbacService.NewMenuService(menuUseCase)
 	positionService := rbacService.NewPositionService(positionUseCase)
+	captchaService := rbacService.NewCaptchaService()
 	authMiddleware := rbacService.NewAuthMiddleware(authService)
 
-	return userService, roleService, departmentService, menuService, positionService, authMiddleware
+	// 设置验证码服务到用户服务
+	userService.SetCaptchaService(captchaService)
+
+	return userService, roleService, departmentService, menuService, positionService, captchaService, authMiddleware
 }

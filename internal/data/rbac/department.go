@@ -50,16 +50,46 @@ func (r *departmentRepo) GetTree(ctx context.Context) ([]*rbac.SysDepartment, er
 	if err != nil {
 		return nil, err
 	}
-	return r.buildTree(departments, 0), nil
+
+	// 统计每个部门的用户数量
+	userCounts := make(map[uint]int)
+	var results []struct {
+		DepartmentID uint
+		Count        int64
+	}
+
+	err = r.db.WithContext(ctx).Table("sys_user").
+		Select("department_id, COUNT(*) as count").
+		Where("department_id > 0").
+		Group("department_id").
+		Scan(&results).Error
+	if err != nil {
+		return nil, err
+	}
+
+	for _, result := range results {
+		userCounts[result.DepartmentID] = int(result.Count)
+	}
+
+	tree := r.buildTreeWithUserCount(departments, 0, userCounts)
+	return tree, nil
 }
 
-func (r *departmentRepo) buildTree(departments []*rbac.SysDepartment, parentID uint) []*rbac.SysDepartment {
+func (r *departmentRepo) buildTreeWithUserCount(departments []*rbac.SysDepartment, parentID uint, userCounts map[uint]int) []*rbac.SysDepartment {
 	var tree []*rbac.SysDepartment
 	for _, dept := range departments {
 		if dept.ParentID == parentID {
-			children := r.buildTree(departments, dept.ID)
+			children := r.buildTreeWithUserCount(departments, dept.ID, userCounts)
 			if len(children) > 0 {
 				dept.Children = children
+				// 累加子部门的用户数量
+				totalUserCount := userCounts[dept.ID]
+				for _, child := range children {
+					totalUserCount += child.UserCount
+				}
+				dept.UserCount = totalUserCount
+			} else {
+				dept.UserCount = userCounts[dept.ID]
 			}
 			tree = append(tree, dept)
 		}

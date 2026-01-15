@@ -152,8 +152,8 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="600px"
-      class="menu-edit-dialog"
+      width="50%"
+      class="menu-edit-dialog responsive-dialog"
       :close-on-click-modal="false"
       @close="handleDialogClose"
     >
@@ -1138,5 +1138,19 @@ onMounted(() => {
 
 :deep(.el-input-number) {
   width: 100%;
+}
+
+/* 响应式对话框 */
+:deep(.responsive-dialog) {
+  max-width: 1000px;
+  min-width: 500px;
+}
+
+@media (max-width: 768px) {
+  :deep(.responsive-dialog .el-dialog) {
+    width: 95% !important;
+    max-width: none;
+    min-width: auto;
+  }
 }
 </style>

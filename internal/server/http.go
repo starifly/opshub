@@ -11,6 +11,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"github.com/ydcloud-dy/opshub/internal/conf"
 	"github.com/ydcloud-dy/opshub/internal/plugin"
+	assetserver "github.com/ydcloud-dy/opshub/internal/server/asset"
 	"github.com/ydcloud-dy/opshub/internal/server/rbac"
 	"github.com/ydcloud-dy/opshub/internal/service"
 	appLogger "github.com/ydcloud-dy/opshub/pkg/logger"
@@ -94,16 +95,25 @@ func (s *HTTPServer) registerRoutes(router *gin.Engine, jwtSecret string) {
 	router.Static("/uploads", "./web/public/uploads")
 
 	// 创建 RBAC 服务
-	userService, roleService, departmentService, menuService, positionService, authMiddleware := rbac.NewRBACServices(s.db, jwtSecret)
+	userService, roleService, departmentService, menuService, positionService, captchaService, authMiddleware := rbac.NewRBACServices(s.db, jwtSecret)
 
 	// RBAC 路由
-	rbacServer := rbac.NewHTTPServer(userService, roleService, departmentService, menuService, positionService, authMiddleware)
+	rbacServer := rbac.NewHTTPServer(userService, roleService, departmentService, menuService, positionService, captchaService, authMiddleware)
 	rbacServer.RegisterRoutes(router)
+
+	// 创建 Asset 服务
+	assetGroupService, hostService := assetserver.NewAssetServices(s.db)
+
+	// Asset 路由
+	assetServer := assetserver.NewHTTPServer(assetGroupService, hostService)
 
 	// API v1 - 需要认证的接口
 	v1 := router.Group("/api/v1")
 	v1.Use(authMiddleware.AuthRequired())
 	{
+		// 注册 Asset 路由
+		assetServer.RegisterRoutes(v1)
+
 		// 上传接口
 		v1.POST("/upload/avatar", s.uploadSrv.UploadAvatar)
 		v1.PUT("/profile/avatar", s.uploadSrv.UpdateUserAvatar)

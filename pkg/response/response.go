@@ -69,8 +69,14 @@ func Error(c *gin.Context, err error) {
 
 // ErrorCode 错误响应(带状态码和消息) - 简化版本
 func ErrorCode(c *gin.Context, httpStatus int, message string) {
-	c.JSON(httpStatus, Response{
-		Code:      httpStatus, // 使用HTTP状态码作为错误码
+	// 对于业务错误，使用5000作为错误码，HTTP状态码为200
+	businessCode := 5000
+	if httpStatus >= 400 && httpStatus < 600 {
+		businessCode = httpStatus
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:      businessCode,
 		Message:   message,
 		Timestamp: time.Now().Unix(),
 	})

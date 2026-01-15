@@ -27,11 +27,17 @@ request.interceptors.response.use(
     // 检查业务状态码
     if (res.code !== 0 && res.code !== 200) {
       // 只在非登录接口的情况下自动显示错误消息
-      // 登录接口的错误由调用方处理,避免重复提示
-      if (!response.config.url.includes('/login')) {
+      // 登录接口和验证码接口的错误由调用方处理,避免重复提示
+      const url = response.config.url || ''
+      if (!url.includes('/login') && !url.includes('/captcha')) {
         ElMessage.error(res.message || '请求失败')
       }
-      return Promise.reject(new Error(res.message || '请求失败'))
+      // 返回完整的响应对象，让调用方可以访问code和message
+      return Promise.reject({
+        code: res.code,
+        message: res.message || '请求失败',
+        response: response
+      })
     }
     // 返回实际数据 (res.data)
     return res.data
@@ -66,9 +72,11 @@ request.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    // 其他错误 - 显示错误消息
-    const errorMsg = error.response?.data?.message || error.message || '网络错误'
-    ElMessage.error(errorMsg)
+    // 其他错误 - 只对非登录接口显示错误消息
+    if (!url.includes('/login')) {
+      const errorMsg = error.response?.data?.message || error.message || '网络错误'
+      ElMessage.error(errorMsg)
+    }
     return Promise.reject(error)
   }
 )

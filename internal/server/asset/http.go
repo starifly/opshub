@@ -1,0 +1,97 @@
+package asset
+
+import (
+	"github.com/gin-gonic/gin"
+	assetService "github.com/ydcloud-dy/opshub/internal/service/asset"
+	assetdata "github.com/ydcloud-dy/opshub/internal/data/asset"
+	assetbiz "github.com/ydcloud-dy/opshub/internal/biz/asset"
+	"gorm.io/gorm"
+)
+
+type HTTPServer struct {
+	assetGroupService *assetService.AssetGroupService
+	hostService       *assetService.HostService
+}
+
+func NewHTTPServer(
+	assetGroupService *assetService.AssetGroupService,
+	hostService *assetService.HostService,
+) *HTTPServer {
+	return &HTTPServer{
+		assetGroupService: assetGroupService,
+		hostService:       hostService,
+	}
+}
+
+func (s *HTTPServer) RegisterRoutes(r *gin.RouterGroup) {
+	// 资产分组管理
+	groups := r.Group("/asset-groups")
+	{
+		groups.GET("/tree", s.assetGroupService.GetGroupTree)
+		groups.GET("/parent-options", s.assetGroupService.GetParentOptions)
+		groups.POST("", s.assetGroupService.CreateGroup)
+		groups.GET("/:id", s.assetGroupService.GetGroup)
+		groups.PUT("/:id", s.assetGroupService.UpdateGroup)
+		groups.DELETE("/:id", s.assetGroupService.DeleteGroup)
+	}
+
+	// 主机管理
+	hosts := r.Group("/hosts")
+	{
+		hosts.GET("", s.hostService.ListHosts)
+		hosts.GET("/:id", s.hostService.GetHost)
+		hosts.POST("", s.hostService.CreateHost)
+		hosts.PUT("/:id", s.hostService.UpdateHost)
+		hosts.DELETE("/:id", s.hostService.DeleteHost)
+		hosts.POST("/:id/collect", s.hostService.CollectHostInfo)
+		hosts.POST("/:id/test", s.hostService.TestHostConnection)
+		hosts.POST("/batch-collect", s.hostService.BatchCollectHostInfo)
+	}
+
+	// 凭证管理
+	credentials := r.Group("/credentials")
+	{
+		credentials.GET("", s.hostService.ListCredentials)
+		credentials.GET("/all", s.hostService.GetAllCredentials)
+		credentials.GET("/:id", s.hostService.GetCredential)
+		credentials.POST("", s.hostService.CreateCredential)
+		credentials.PUT("/:id", s.hostService.UpdateCredential)
+		credentials.DELETE("/:id", s.hostService.DeleteCredential)
+	}
+
+	// 云平台账号管理
+	cloudAccounts := r.Group("/cloud-accounts")
+	{
+		cloudAccounts.GET("", s.hostService.ListCloudAccounts)
+		cloudAccounts.GET("/all", s.hostService.GetAllCloudAccounts)
+		cloudAccounts.GET("/:id", s.hostService.GetCloudAccount)
+		cloudAccounts.POST("", s.hostService.CreateCloudAccount)
+		cloudAccounts.PUT("/:id", s.hostService.UpdateCloudAccount)
+		cloudAccounts.DELETE("/:id", s.hostService.DeleteCloudAccount)
+		cloudAccounts.POST("/import", s.hostService.ImportFromCloud)
+	}
+}
+
+// NewAssetServices 创建asset相关的服务
+func NewAssetServices(db *gorm.DB) (
+	*assetService.AssetGroupService,
+	*assetService.HostService,
+) {
+	// 初始化Repository
+	assetGroupRepo := assetdata.NewAssetGroupRepo(db)
+	hostRepo := assetdata.NewHostRepo(db)
+	credentialRepo := assetdata.NewCredentialRepo(db)
+	cloudAccountRepo := assetdata.NewCloudAccountRepo(db)
+
+	// 初始化UseCase
+	assetGroupUseCase := assetbiz.NewAssetGroupUseCase(assetGroupRepo)
+	credentialUseCase := assetbiz.NewCredentialUseCase(credentialRepo)
+	cloudAccountUseCase := assetbiz.NewCloudAccountUseCase(cloudAccountRepo)
+	hostUseCase := assetbiz.NewHostUseCase(hostRepo, credentialRepo, assetGroupRepo, cloudAccountRepo)
+
+	// 初始化Service
+	assetGroupService := assetService.NewAssetGroupService(assetGroupUseCase)
+	hostService := assetService.NewHostService(hostUseCase, credentialUseCase, cloudAccountUseCase)
+
+	return assetGroupService, hostService
+}

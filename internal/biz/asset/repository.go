@@ -1,0 +1,42 @@
+package asset
+
+import "context"
+
+type AssetGroupRepo interface {
+	Create(ctx context.Context, group *AssetGroup) error
+	Update(ctx context.Context, group *AssetGroup) error
+	Delete(ctx context.Context, id uint) error
+	GetByID(ctx context.Context, id uint) (*AssetGroup, error)
+	GetTree(ctx context.Context) ([]*AssetGroup, error)
+	GetAll(ctx context.Context) ([]*AssetGroup, error)
+	List(ctx context.Context, page, pageSize int, keyword string) ([]*AssetGroup, int64, error)
+}
+
+type HostRepo interface {
+	Create(ctx context.Context, host *Host) error
+	Update(ctx context.Context, host *Host) error
+	Delete(ctx context.Context, id uint) error
+	GetByID(ctx context.Context, id uint) (*Host, error)
+	List(ctx context.Context, page, pageSize int, keyword string) ([]*Host, int64, error)
+	GetByGroupID(ctx context.Context, groupID uint) ([]*Host, error)
+	GetByIP(ctx context.Context, ip string) (*Host, error)
+}
+
+type CredentialRepo interface {
+	Create(ctx context.Context, credential *Credential) error
+	Update(ctx context.Context, credential *Credential) error
+	Delete(ctx context.Context, id uint) error
+	GetByID(ctx context.Context, id uint) (*Credential, error)
+	GetByIDDecrypted(ctx context.Context, id uint) (*Credential, error)
+	List(ctx context.Context, page, pageSize int, keyword string) ([]*Credential, int64, error)
+	GetAll(ctx context.Context) ([]*Credential, error)
+}
+
+type CloudAccountRepo interface {
+	Create(ctx context.Context, account *CloudAccount) error
+	Update(ctx context.Context, account *CloudAccount) error
+	Delete(ctx context.Context, id uint) error
+	GetByID(ctx context.Context, id uint) (*CloudAccount, error)
+	List(ctx context.Context, page, pageSize int) ([]*CloudAccount, int64, error)
+	GetAll(ctx context.Context) ([]*CloudAccount, error)
+}

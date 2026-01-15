@@ -33,7 +33,7 @@ func (r *userRepo) Delete(ctx context.Context, id uint) error {
 
 func (r *userRepo) GetByID(ctx context.Context, id uint) (*rbac.SysUser, error) {
 	var user rbac.SysUser
-	err := r.db.WithContext(ctx).Preload("Department").Preload("Roles").First(&user, id).Error
+	err := r.db.WithContext(ctx).Preload("Department").Preload("Roles").Preload("Positions").First(&user, id).Error
 	return &user, err
 }
 
@@ -43,6 +43,7 @@ func (r *userRepo) GetByUsername(ctx context.Context, username string) (*rbac.Sy
 	err := r.db.WithContext(ctx).
 		Preload("Department").
 		Preload("Roles").
+		Preload("Positions").
 		Where("username = ?", username).
 		First(&user).Error
 	if err != nil {
@@ -51,7 +52,7 @@ func (r *userRepo) GetByUsername(ctx context.Context, username string) (*rbac.Sy
 	return &user, nil
 }
 
-func (r *userRepo) List(ctx context.Context, page, pageSize int, keyword string) ([]*rbac.SysUser, int64, error) {
+func (r *userRepo) List(ctx context.Context, page, pageSize int, keyword string, departmentID uint) ([]*rbac.SysUser, int64, error) {
 	var users []*rbac.SysUser
 	var total int64
 
@@ -60,13 +61,16 @@ func (r *userRepo) List(ctx context.Context, page, pageSize int, keyword string)
 		query = query.Where("username LIKE ? OR real_name LIKE ? OR email LIKE ?",
 			"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	}
+	if departmentID > 0 {
+		query = query.Where("department_id = ?", departmentID)
+	}
 
 	err := query.Count(&total).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
-	err = query.Preload("Department").Preload("Roles").
+	err = query.Preload("Department").Preload("Roles").Preload("Positions").
 		Offset((page - 1) * pageSize).Limit(pageSize).
 		Order("created_at DESC").
 		Find(&users).Error
@@ -88,6 +92,27 @@ func (r *userRepo) AssignRoles(ctx context.Context, userID uint, roleIDs []uint)
 				RoleID: roleID,
 			}
 			if err := tx.Create(userRole).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *userRepo) AssignPositions(ctx context.Context, userID uint, positionIDs []uint) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 删除原有岗位
+		if err := tx.Where("user_id = ?", userID).Delete(&rbac.SysUserPosition{}).Error; err != nil {
+			return err
+		}
+
+		// 添加新岗位
+		for _, positionID := range positionIDs {
+			userPosition := &rbac.SysUserPosition{
+				UserID:     userID,
+				PositionID: positionID,
+			}
+			if err := tx.Create(userPosition).Error; err != nil {
 				return err
 			}
 		}

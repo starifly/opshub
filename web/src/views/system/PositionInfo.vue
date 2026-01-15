@@ -127,8 +127,8 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="600px"
-      class="position-edit-dialog"
+      width="50%"
+      class="position-edit-dialog responsive-dialog"
       @close="handleDialogClose"
     >
       <el-form :model="positionForm" :rules="rules" ref="formRef" label-width="100px">
@@ -168,8 +168,8 @@
     <el-dialog
       v-model="assignUsersVisible"
       title="分配用户"
-      width="1000px"
-      class="assign-users-dialog"
+      width="70%"
+      class="assign-users-dialog responsive-dialog"
       @close="handleAssignUsersClose"
     >
       <div class="assign-content">
@@ -1028,5 +1028,19 @@ onMounted(() => {
 /* 空状态样式 */
 :deep(.el-empty) {
   padding: 40px 0;
+}
+
+/* 响应式对话框 */
+:deep(.responsive-dialog) {
+  max-width: 1200px;
+  min-width: 500px;
+}
+
+@media (max-width: 768px) {
+  :deep(.responsive-dialog .el-dialog) {
+    width: 95% !important;
+    max-width: none;
+    min-width: auto;
+  }
 }
 </style>

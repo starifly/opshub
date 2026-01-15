@@ -1,0 +1,2302 @@
+<template>
+  <div class="hosts-page-container">
+    <!-- 页面标题和操作按钮 -->
+    <div class="page-header">
+      <div class="page-title-group">
+        <div class="page-title-icon">
+          <el-icon><Monitor /></el-icon>
+        </div>
+        <div>
+          <h2 class="page-title">主机管理</h2>
+          <p class="page-subtitle">管理所有服务器和主机资源，支持多种方式导入</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <el-dropdown @command="handleImportCommand" class="import-dropdown">
+          <el-button class="black-button">
+            <el-icon style="margin-right: 6px;"><Plus /></el-icon>
+            新增主机
+            <el-icon style="margin-left: 6px;"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="direct">
+                <el-icon><DocumentAdd /></el-icon>
+                直接导入
+              </el-dropdown-item>
+              <el-dropdown-item command="excel">
+                <el-icon><Upload /></el-icon>
+                Excel导入
+              </el-dropdown-item>
+              <el-dropdown-item command="cloud">
+                <el-icon><Cloudy /></el-icon>
+                云主机导入
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </div>
+
+    <!-- 主内容区域：左侧分组树 + 右侧主机列表 -->
+    <div class="main-content">
+      <!-- 左侧分组树 -->
+      <div class="left-panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <el-icon class="panel-icon"><Collection /></el-icon>
+            <span>资产分组</span>
+          </div>
+          <div class="panel-actions">
+            <el-tooltip content="新增分组" placement="top">
+              <el-button circle size="small" @click="handleAddGroup">
+                <el-icon><Plus /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip :content="isExpandAll ? '折叠全部' : '展开全部'" placement="top">
+              <el-button circle size="small" @click="toggleExpandAll">
+                <el-icon><Sort /></el-icon>
+              </el-button>
+            </el-tooltip>
+          </div>
+        </div>
+        <div class="panel-body">
+          <el-input
+            v-model="groupSearchKeyword"
+            placeholder="搜索分组..."
+            clearable
+            size="small"
+            class="group-search"
+            @input="filterGroupTree"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <div class="tree-container" v-loading="groupLoading">
+            <el-tree
+              ref="groupTreeRef"
+              :data="filteredGroupTree"
+              :props="treeProps"
+              :default-expand-all="false"
+              :expand-on-click-node="false"
+              :highlight-current="true"
+              node-key="id"
+              class="group-tree"
+              @node-click="handleGroupClick"
+            >
+              <template #default="{ node, data }">
+                <div class="tree-node">
+                  <span class="node-icon">
+                    <el-icon v-if="!data.parentId || data.parentId === 0" color="#67c23a">
+                      <Collection />
+                    </el-icon>
+                    <el-icon v-else color="#409eff">
+                      <Folder />
+                    </el-icon>
+                  </span>
+                  <span class="node-label">{{ node.label }}</span>
+                  <span class="node-count">({{ data.hostCount || 0 }})</span>
+                  <span class="node-actions" @click.stop>
+                    <el-dropdown trigger="click" @command="(cmd) => handleGroupAction(cmd, data)">
+                      <el-icon class="more-icon"><MoreFilled /></el-icon>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="edit">
+                            <el-icon><Edit /></el-icon> 编辑
+                          </el-dropdown-item>
+                          <el-dropdown-item command="delete" divided>
+                            <el-icon><Delete /></el-icon> 删除
+                          </el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </span>
+                </div>
+              </template>
+            </el-tree>
+            <el-empty v-if="filteredGroupTree.length === 0 && !groupLoading" description="暂无分组" :image-size="60" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧主机列表 -->
+      <div class="right-panel">
+        <!-- 搜索和筛选栏 -->
+        <div class="filter-bar">
+          <div class="filter-inputs">
+            <el-input
+              v-model="searchForm.keyword"
+              placeholder="搜索主机名/IP..."
+              clearable
+              class="filter-input"
+              @input="handleSearch"
+            >
+              <template #prefix>
+                <el-icon class="search-icon"><Search /></el-icon>
+              </template>
+            </el-input>
+
+            <el-select
+              v-model="searchForm.status"
+              placeholder="主机状态"
+              clearable
+              class="filter-input"
+              @change="handleSearch"
+            >
+              <el-option label="在线" :value="1" />
+              <el-option label="离线" :value="0" />
+              <el-option label="未知" :value="-1" />
+            </el-select>
+          </div>
+
+          <div class="filter-actions">
+            <el-button class="reset-btn" @click="handleReset">
+              <el-icon style="margin-right: 4px;"><RefreshLeft /></el-icon>
+              重置
+            </el-button>
+            <el-button @click="loadHostList">
+              <el-icon style="margin-right: 4px;"><Refresh /></el-icon>
+              刷新
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 当前选择的分组 -->
+        <div v-if="selectedGroup" class="selected-group-bar">
+          <el-icon><FolderOpened /></el-icon>
+          <span class="group-path">{{ getGroupPath(selectedGroup) }}</span>
+          <el-tag size="small" type="info">{{ hostPagination.total }} 台主机</el-tag>
+          <el-button link size="small" @click="clearGroupSelection">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
+
+        <!-- 主机列表 -->
+        <div class="table-wrapper">
+          <el-table
+            :data="hostList"
+            v-loading="hostLoading"
+            class="modern-table"
+            :header-cell-style="{ background: '#fafbfc', color: '#606266', fontWeight: '600' }"
+          >
+            <el-table-column label="主机名" prop="name" min-width="150" fixed="left">
+              <template #default="{ row }">
+                <div class="hostname-cell">
+                  <el-icon class="host-icon" :color="getStatusColor(row.status)">
+                    <Monitor />
+                  </el-icon>
+                  <div>
+                    <div class="hostname">{{ row.name }}</div>
+                    <div class="ip">{{ row.ip }}:{{ row.port }}</div>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="分组" prop="groupName" min-width="100">
+              <template #default="{ row }">
+                <el-tag v-if="row.groupName" size="small" type="info">{{ row.groupName }}</el-tag>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="凭证" min-width="120">
+              <template #default="{ row }">
+                <div v-if="row.credential" class="credential-cell">
+                  <div class="credential-name">{{ row.credential.name }}</div>
+                  <el-tag size="small" :type="row.credential.type === 'password' ? 'warning' : 'success'">
+                    {{ row.credential.typeText }}
+                  </el-tag>
+                </div>
+                <span v-else class="text-muted text-danger">未配置</span>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="状态" width="80" align="center">
+              <template #default="{ row }">
+                <el-tag :type="getStatusType(row.status)" effect="dark" size="small">
+                  {{ row.statusText }}
+                </el-tag>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="CPU" min-width="120">
+              <template #default="{ row }">
+                <div class="resource-cell">
+                  <div v-if="row.cpuCores" class="resource-info">
+                    <span class="resource-label">{{ row.cpuCores }}核</span>
+                    <el-progress
+                      :percentage="row.cpuUsage ? parseFloat(row.cpuUsage.toFixed(1)) : 0"
+                      :color="getUsageColor(row.cpuUsage)"
+                      :stroke-width="6"
+                      :show-text="true"
+                    />
+                  </div>
+                  <span v-else class="text-muted">-</span>
+                </div>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="内存" min-width="140">
+              <template #default="{ row }">
+                <div class="resource-cell">
+                  <div v-if="row.memoryTotal" class="resource-info">
+                    <span class="resource-label">{{ formatBytes(row.memoryUsed) }} / {{ formatBytes(row.memoryTotal) }}</span>
+                    <el-progress
+                      :percentage="row.memoryUsage ? parseFloat(row.memoryUsage.toFixed(1)) : 0"
+                      :color="getUsageColor(row.memoryUsage)"
+                      :stroke-width="6"
+                      :show-text="true"
+                    />
+                  </div>
+                  <span v-else class="text-muted">-</span>
+                </div>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="磁盘" min-width="140">
+              <template #default="{ row }">
+                <div class="resource-cell">
+                  <div v-if="row.diskTotal" class="resource-info">
+                    <span class="resource-label">{{ formatBytes(row.diskUsed) }} / {{ formatBytes(row.diskTotal) }}</span>
+                    <el-progress
+                      :percentage="row.diskUsage ? parseFloat(row.diskUsage.toFixed(1)) : 0"
+                      :color="getUsageColor(row.diskUsage)"
+                      :stroke-width="6"
+                      :show-text="true"
+                    />
+                  </div>
+                  <span v-else class="text-muted">-</span>
+                </div>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="进程/端口" width="100" align="center">
+              <template #default="{ row }">
+                <div class="process-port-cell">
+                  <div class="item">
+                    <el-icon><Connection /></el-icon>
+                    <span>{{ row.processCount || 0 }}</span>
+                  </div>
+                  <div class="item">
+                    <el-icon><Position /></el-icon>
+                    <span>{{ row.portCount || 0 }}</span>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="标签" prop="tags" min-width="120">
+              <template #default="{ row }">
+                <div v-if="row.tags && row.tags.length > 0" class="tags-cell">
+                  <el-tag
+                    v-for="(tag, index) in row.tags.slice(0, 3)"
+                    :key="index"
+                    size="small"
+                    class="tag-item"
+                  >
+                    {{ tag }}
+                  </el-tag>
+                  <el-tag v-if="row.tags.length > 3" size="small" type="info">
+                    +{{ row.tags.length - 3 }}
+                  </el-tag>
+                </div>
+                <span v-else class="text-muted">-</span>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="配置" min-width="150">
+              <template #default="{ row }">
+                <div class="config-cell">
+                  <div v-if="row.os || row.kernel || row.arch" class="config-info">
+                    <div v-if="row.os" class="config-item">
+                      <el-icon><Platform /></el-icon>
+                      <span class="config-text">{{ row.os }}</span>
+                    </div>
+                    <div v-if="row.kernel" class="config-item">
+                      <el-icon><Operation /></el-icon>
+                      <span class="config-text">{{ row.kernel }}</span>
+                    </div>
+                  </div>
+                  <span v-else class="text-muted">-</span>
+                </div>
+              </template>
+            </el-table-column>
+
+            <el-table-column label="操作" width="240" fixed="right" align="center">
+              <template #default="{ row }">
+                <div class="action-buttons">
+                  <el-tooltip content="采集信息" placement="top">
+                    <el-button link class="action-btn action-refresh" @click="handleCollectHost(row)">
+                      <el-icon><Refresh /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="编辑" placement="top">
+                    <el-button link class="action-btn action-edit" @click="handleEditHost(row)">
+                      <el-icon><Edit /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="删除" placement="top">
+                    <el-button link class="action-btn action-delete" @click="handleDeleteHost(row)">
+                      <el-icon><Delete /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <!-- 分页 -->
+          <div class="pagination-wrapper">
+            <el-pagination
+              v-model:current-page="hostPagination.page"
+              v-model:page-size="hostPagination.pageSize"
+              :total="hostPagination.total"
+              :page-sizes="[10, 20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              @size-change="loadHostList"
+              @current-change="loadHostList"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 直接导入对话框 -->
+    <el-dialog
+      v-model="directImportVisible"
+      :title="hostForm.id && hostForm.id > 0 ? '编辑主机' : '新增主机'"
+      width="60%"
+      class="host-import-dialog responsive-dialog"
+      @close="handleDirectImportClose"
+    >
+      <el-form :model="hostForm" :rules="hostRules" ref="hostFormRef" label-width="120px">
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="主机名称" prop="name">
+              <el-input v-model="hostForm.name" placeholder="请输入主机名称" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="所属分组" prop="groupId">
+              <el-tree-select
+                v-model="hostForm.groupId"
+                :data="groupTreeOptions"
+                :props="{ value: 'id', label: 'name', children: 'children' }"
+                clearable
+                check-strictly
+                placeholder="请选择分组"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="IP地址" prop="ip">
+              <el-input v-model="hostForm.ip" placeholder="请输入IP地址" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="SSH端口" prop="port">
+              <el-input-number v-model="hostForm.port" :min="1" :max="65535" :step="1" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="SSH用户名" prop="sshUser">
+              <el-input v-model="hostForm.sshUser" placeholder="如：root" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="认证凭据">
+              <el-select v-model="hostForm.credentialId" placeholder="选择或新建凭证" clearable filterable>
+                <el-option
+                  v-for="cred in credentialList"
+                  :key="cred.id"
+                  :label="`${cred.name} (${cred.typeText})`"
+                  :value="cred.id"
+                />
+                <template #footer>
+                  <el-button text @click="showCredentialDialog = true" style="width: 100%">
+                    <el-icon><Plus /></el-icon> 新建凭证
+                  </el-button>
+                </template>
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="24">
+            <el-form-item label="主机标签">
+              <el-input v-model="hostForm.tags" placeholder="多个标签用逗号分隔，如：web,prod" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="24">
+            <el-form-item label="备注">
+              <el-input v-model="hostForm.description" type="textarea" :rows="3" placeholder="请输入备注信息" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="directImportVisible = false">取消</el-button>
+          <el-button class="black-button" @click="handleDirectImportSubmit" :loading="hostSubmitting">
+            {{ hostForm.id && hostForm.id > 0 ? '保存' : '确定' }}
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- Excel导入对话框 -->
+    <el-dialog
+      v-model="excelImportVisible"
+      title="Excel批量导入"
+      width="50%"
+      class="excel-import-dialog responsive-dialog"
+      @close="handleExcelImportClose"
+    >
+      <div class="excel-import-content">
+        <el-alert title="导入说明" type="info" :closable="false" style="margin-bottom: 20px;">
+          <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+            <li>请先下载Excel模板文件</li>
+            <li>按照模板格式填写主机信息</li>
+            <li>支持批量导入多台主机</li>
+            <li>IP地址重复的主机会自动跳过</li>
+          </ul>
+        </el-alert>
+
+        <el-form :model="excelImportForm" label-width="120px">
+          <el-form-item label="所属分组">
+            <el-tree-select
+              v-model="excelImportForm.groupId"
+              :data="groupTreeOptions"
+              :props="{ value: 'id', label: 'name', children: 'children' }"
+              clearable
+              check-strictly
+              placeholder="请选择默认分组"
+            />
+          </el-form-item>
+
+          <el-form-item label="下载模板">
+            <el-button @click="downloadTemplate">
+              <el-icon style="margin-right: 6px;"><Download /></el-icon>
+              下载Excel模板
+            </el-button>
+          </el-form-item>
+
+          <el-form-item label="上传文件">
+            <el-upload
+              ref="uploadRef"
+              class="upload-demo"
+              drag
+              action="#"
+              :auto-upload="false"
+              :on-change="handleFileChange"
+              :limit="1"
+              accept=".xlsx,.xls"
+            >
+              <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+              <div class="el-upload__text">
+                将文件拖到此处，或<em>点击上传</em>
+              </div>
+              <template #tip>
+                <div class="el-upload__tip">
+                  只支持 .xlsx 或 .xls 格式的Excel文件
+                </div>
+              </template>
+            </el-upload>
+          </el-form-item>
+
+          <el-form-item v-if="uploadedFile" label="已选择文件">
+            <div class="file-info">
+              <el-icon><Document /></el-icon>
+              <span>{{ uploadedFile.name }}</span>
+              <el-tag size="small" type="success">{{ (uploadedFile.size / 1024).toFixed(2) }} KB</el-tag>
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="excelImportVisible = false">取消</el-button>
+          <el-button class="black-button" @click="handleExcelImportSubmit" :loading="excelImporting">开始导入</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 云主机导入对话框 -->
+    <el-dialog
+      v-model="cloudImportVisible"
+      title="云主机导入"
+      width="70%"
+      class="cloud-import-dialog responsive-dialog"
+      @close="handleCloudImportClose"
+    >
+      <el-steps :active="cloudImportStep" align-center style="margin-bottom: 30px;">
+        <el-step title="选择云平台" />
+        <el-step title="选择主机" />
+        <el-step title="确认导入" />
+      </el-steps>
+
+      <!-- 步骤1: 选择云平台 -->
+      <div v-if="cloudImportStep === 0" class="cloud-step-content">
+        <el-form :model="cloudImportForm" label-width="120px">
+          <el-form-item label="云平台">
+            <el-select v-model="cloudImportForm.accountId" placeholder="请选择云平台账号" filterable>
+              <el-option
+                v-for="account in cloudAccountList"
+                :key="account.id"
+                :label="`${account.name} (${account.providerText})`"
+                :value="account.id"
+              >
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>{{ account.name }}</span>
+                  <el-tag size="small" :type="account.provider === 'aliyun' ? 'warning' : 'primary'">
+                    {{ account.providerText }}
+                  </el-tag>
+                </div>
+              </el-option>
+              <template #footer>
+                <el-button text @click="showCloudAccountDialog = true" style="width: 100%">
+                  <el-icon><Plus /></el-icon> 新增云平台账号
+                </el-button>
+              </template>
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="区域">
+            <el-select v-model="cloudImportForm.region" placeholder="请选择区域" filterable>
+              <el-option label="华北1 (青岛)" value="cn-qingdao" />
+              <el-option label="华北2 (北京)" value="cn-beijing" />
+              <el-option label="华北3 (张家口)" value="cn-zhangjiakou" />
+              <el-option label="华北5 (呼和浩特)" value="cn-huhehaote" />
+              <el-option label="华东1 (杭州)" value="cn-hangzhou" />
+              <el-option label="华东2 (上海)" value="cn-shanghai" />
+              <el-option label="华南1 (深圳)" value="cn-shenzhen" />
+              <el-option label="华南2 (河源)" value="cn-heyuan" />
+              <el-option label="华南3 (广州)" value="cn-guangzhou" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="导入到分组">
+            <el-tree-select
+              v-model="cloudImportForm.groupId"
+              :data="groupTreeOptions"
+              :props="{ value: 'id', label: 'name', children: 'children' }"
+              clearable
+              check-strictly
+              placeholder="请选择分组"
+            />
+          </el-form-item>
+        </el-form>
+
+        <el-alert title="提示" type="info" :closable="false">
+          <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+            <li>请先添加云平台账号（Access Key / Secret Key）</li>
+            <li>系统将自动获取该账号下指定区域的ECS实例</li>
+            <li>支持阿里云、腾讯云等主流云厂商</li>
+          </ul>
+        </el-alert>
+      </div>
+
+      <!-- 步骤2: 选择主机 -->
+      <div v-if="cloudImportStep === 1" class="cloud-step-content">
+        <div class="step-header">
+          <span>找到 {{ cloudHostList.length }} 台云主机，请选择要导入的主机</span>
+          <el-checkbox v-model="selectAllCloudHosts" @change="handleSelectAllCloudHosts">全选</el-checkbox>
+        </div>
+
+        <el-table
+          :data="cloudHostList"
+          v-loading="loadingCloudHosts"
+          @selection-change="handleCloudHostSelectionChange"
+          max-height="400"
+        >
+          <el-table-column type="selection" width="55" />
+          <el-table-column label="实例名称" prop="name" min-width="150" />
+          <el-table-column label="实例ID" prop="instanceId" min-width="180" />
+          <el-table-column label="公网IP" prop="publicIp" min-width="140" />
+          <el-table-column label="私网IP" prop="privateIp" min-width="140" />
+          <el-table-column label="操作系统" prop="os" min-width="150" show-overflow-tooltip />
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'Running' ? 'success' : 'info'" size="small">
+                {{ row.status }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-empty v-if="cloudHostList.length === 0 && !loadingCloudHosts" description="暂无云主机数据" />
+      </div>
+
+      <!-- 步骤3: 确认导入 -->
+      <div v-if="cloudImportStep === 2" class="cloud-step-content">
+        <el-result icon="success" title="准备就绪" sub-title="以下主机将被导入到系统中">
+          <template #extra>
+            <div class="import-summary">
+              <el-descriptions :column="1" border>
+                <el-descriptions-item label="云平台账号">{{ selectedCloudAccount?.name }}</el-descriptions-item>
+                <el-descriptions-item label="目标分组">{{ selectedCloudGroup?.name }}</el-descriptions-item>
+                <el-descriptions-item label="待导入主机">{{ selectedCloudHosts.length }} 台</el-descriptions-item>
+              </el-descriptions>
+
+              <div class="host-list-preview">
+                <h4>主机列表：</h4>
+                <el-tag
+                  v-for="host in selectedCloudHosts"
+                  :key="host.instanceId"
+                  style="margin: 4px;"
+                >
+                  {{ host.name }}
+                </el-tag>
+              </div>
+            </div>
+          </template>
+        </el-result>
+      </div>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button v-if="cloudImportStep > 0" @click="cloudImportStep--">上一步</el-button>
+          <el-button @click="cloudImportVisible = false">取消</el-button>
+          <el-button
+            v-if="cloudImportStep === 0"
+            class="black-button"
+            @click="handleGetCloudHosts"
+            :loading="loadingCloudHosts"
+          >
+            下一步
+          </el-button>
+          <el-button
+            v-if="cloudImportStep === 1"
+            class="black-button"
+            @click="cloudImportStep++"
+            :disabled="selectedCloudHosts.length === 0"
+          >
+            下一步
+          </el-button>
+          <el-button
+            v-if="cloudImportStep === 2"
+            class="black-button"
+            @click="handleCloudImportSubmit"
+            :loading="cloudImporting"
+          >
+            开始导入
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 新建凭证对话框 -->
+    <el-dialog
+      v-model="showCredentialDialog"
+      title="新建凭证"
+      width="50%"
+      class="credential-dialog responsive-dialog"
+      @close="handleCredentialDialogClose"
+    >
+      <el-form :model="credentialForm" :rules="credentialRules" ref="credentialFormRef" label-width="120px">
+        <el-form-item label="凭证名称" prop="name">
+          <el-input v-model="credentialForm.name" placeholder="请输入凭证名称，如：生产环境root凭证" />
+        </el-form-item>
+
+        <el-form-item label="认证方式" prop="type">
+          <el-radio-group v-model="credentialForm.type" @change="handleAuthTypeChange">
+            <el-radio label="password">密码认证</el-radio>
+            <el-radio label="key">密钥认证</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item v-if="credentialForm.type === 'password'" label="用户名" prop="username">
+          <el-input v-model="credentialForm.username" placeholder="如：root" />
+        </el-form-item>
+
+        <el-form-item v-if="credentialForm.type === 'password'" label="密码" prop="password">
+          <el-input v-model="credentialForm.password" type="password" placeholder="请输入密码" show-password />
+        </el-form-item>
+
+        <el-form-item v-if="credentialForm.type === 'key'" label="用户名">
+          <el-input v-model="credentialForm.username" placeholder="如：root（可选）" />
+        </el-form-item>
+
+        <el-form-item v-if="credentialForm.type === 'key'" label="私钥" prop="privateKey">
+          <el-input
+            v-model="credentialForm.privateKey"
+            type="textarea"
+            :rows="8"
+            placeholder="请粘贴PEM格式的私钥内容"
+          />
+        </el-form-item>
+
+        <el-form-item v-if="credentialForm.type === 'key'" label="私钥密码">
+          <el-input v-model="credentialForm.passphrase" type="password" placeholder="如果私钥有密码请输入（可选）" show-password />
+        </el-form-item>
+
+        <el-form-item label="备注">
+          <el-input v-model="credentialForm.description" type="textarea" :rows="2" placeholder="请输入备注信息" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="showCredentialDialog = false">取消</el-button>
+          <el-button class="black-button" @click="handleCredentialSubmit" :loading="credentialSubmitting">确定</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 新增云平台账号对话框 -->
+    <el-dialog
+      v-model="showCloudAccountDialog"
+      title="新增云平台账号"
+      width="50%"
+      class="cloud-account-dialog responsive-dialog"
+      @close="handleCloudAccountDialogClose"
+    >
+      <el-form :model="cloudAccountForm" :rules="cloudAccountRules" ref="cloudAccountFormRef" label-width="120px">
+        <el-form-item label="账号名称" prop="name">
+          <el-input v-model="cloudAccountForm.name" placeholder="请输入账号名称，如：阿里云生产账号" />
+        </el-form-item>
+
+        <el-form-item label="云厂商" prop="provider">
+          <el-select v-model="cloudAccountForm.provider" placeholder="请选择云厂商">
+            <el-option label="阿里云" value="aliyun" />
+            <el-option label="腾讯云" value="tencent" />
+            <el-option label="AWS" value="aws" />
+            <el-option label="华为云" value="huawei" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="Access Key" prop="accessKey">
+          <el-input v-model="cloudAccountForm.accessKey" placeholder="请输入Access Key ID" />
+        </el-form-item>
+
+        <el-form-item label="Secret Key" prop="secretKey">
+          <el-input v-model="cloudAccountForm.secretKey" type="password" placeholder="请输入Access Key Secret" show-password />
+        </el-form-item>
+
+        <el-form-item label="默认区域">
+          <el-input v-model="cloudAccountForm.region" placeholder="如：cn-hangzhou（可选）" />
+        </el-form-item>
+
+        <el-form-item label="备注">
+          <el-input v-model="cloudAccountForm.description" type="textarea" :rows="2" placeholder="请输入备注信息" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="showCloudAccountDialog = false">取消</el-button>
+          <el-button class="black-button" @click="handleCloudAccountSubmit" :loading="cloudAccountSubmitting">确定</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 新增/编辑分组对话框 -->
+    <el-dialog
+      v-model="groupDialogVisible"
+      :title="groupDialogTitle"
+      width="50%"
+      class="group-edit-dialog responsive-dialog"
+      @close="handleGroupDialogClose"
+    >
+      <el-form :model="groupForm" :rules="groupRules" ref="groupFormRef" label-width="100px">
+        <el-form-item label="上级分组">
+          <el-tree-select
+            v-model="groupForm.parentId"
+            :data="groupTreeOptions"
+            :props="{ value: 'id', label: 'name', children: 'children' }"
+            clearable
+            check-strictly
+            placeholder="不选择则为顶级分组"
+          />
+        </el-form-item>
+        <el-form-item label="分组名称" prop="name">
+          <el-input v-model="groupForm.name" placeholder="请输入分组名称" />
+        </el-form-item>
+        <el-form-item label="分组编码" prop="code">
+          <el-input v-model="groupForm.code" placeholder="请输入分组编码" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="groupForm.description" type="textarea" :rows="3" placeholder="请输入描述" />
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="groupForm.sort" :min="0" />
+        </el-form-item>
+        <el-form-item label="状态" prop="status">
+          <el-radio-group v-model="groupForm.status">
+            <el-radio :label="1">正常</el-radio>
+            <el-radio :label="0">停用</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="groupDialogVisible = false">取消</el-button>
+          <el-button class="black-button" @click="handleGroupSubmit" :loading="groupSubmitting">确定</el-button>
+        </div>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox, FormInstance, FormRules, UploadFile, UploadProps } from 'element-plus'
+import {
+  Plus,
+  Edit,
+  Delete,
+  Monitor,
+  Search,
+  Refresh,
+  RefreshLeft,
+  Collection,
+  Folder,
+  FolderOpened,
+  Sort,
+  Close,
+  MoreFilled,
+  ArrowDown,
+  DocumentAdd,
+  Upload,
+  Cloudy,
+  Download,
+  Document,
+  UploadFilled,
+  Connection,
+  Position,
+  Platform,
+  Operation
+} from '@element-plus/icons-vue'
+import {
+  getGroupTree,
+  createGroup,
+  updateGroup,
+  deleteGroup
+} from '@/api/assetGroup'
+import {
+  getHostList,
+  createHost,
+  updateHost,
+  deleteHost,
+  getCredentials,
+  createCredential,
+  getCloudAccounts,
+  createCloudAccount,
+  importFromCloud,
+  collectHostInfo,
+  testHostConnection,
+  batchCollectHostInfo
+} from '@/api/host'
+
+// 加载状态
+const groupLoading = ref(false)
+const hostLoading = ref(false)
+const hostSubmitting = ref(false)
+const excelImporting = ref(false)
+const cloudImporting = ref(false)
+const loadingCloudHosts = ref(false)
+const credentialSubmitting = ref(false)
+const cloudAccountSubmitting = ref(false)
+const groupSubmitting = ref(false)
+
+// 对话框状态
+const directImportVisible = ref(false)
+const excelImportVisible = ref(false)
+const cloudImportVisible = ref(false)
+const showCredentialDialog = ref(false)
+const showCloudAccountDialog = ref(false)
+const groupDialogVisible = ref(false)
+
+const groupDialogTitle = ref('')
+const isGroupEdit = ref(false)
+
+// 表单引用
+const hostFormRef = ref<FormInstance>()
+const credentialFormRef = ref<FormInstance>()
+const cloudAccountFormRef = ref<FormInstance>()
+const groupFormRef = ref<FormInstance>()
+const groupTreeRef = ref()
+const uploadRef = ref()
+
+// 分组树数据
+const groupTree = ref<any[]>([])
+const filteredGroupTree = ref<any[]>([])
+const groupSearchKeyword = ref('')
+const selectedGroup = ref<any>(null)
+const isExpandAll = ref(false)
+
+// 主机列表数据
+const hostList = ref([])
+const credentialList = ref([])
+const cloudAccountList = ref([])
+
+// 搜索表单
+const searchForm = reactive({
+  keyword: '',
+  status: undefined as number | undefined
+})
+
+// 主机分页
+const hostPagination = reactive({
+  page: 1,
+  pageSize: 20,
+  total: 0
+})
+
+// 树形组件配置
+const treeProps = {
+  children: 'children',
+  label: 'name',
+  value: 'id'
+}
+
+// 主机表单
+const hostForm = reactive({
+  id: 0,
+  name: '',
+  groupId: null as number | null,
+  sshUser: 'root',
+  ip: '',
+  port: 22,
+  credentialId: null as number | null,
+  tags: '',
+  description: ''
+})
+
+// 凭证表单
+const credentialForm = reactive({
+  name: '',
+  type: 'password',
+  username: '',
+  password: '',
+  privateKey: '',
+  passphrase: '',
+  description: ''
+})
+
+// 云平台账号表单
+const cloudAccountForm = reactive({
+  name: '',
+  provider: 'aliyun',
+  accessKey: '',
+  secretKey: '',
+  region: '',
+  description: '',
+  status: 1
+})
+
+// Excel导入表单
+const excelImportForm = reactive({
+  groupId: null as number | null
+})
+const uploadedFile = ref<UploadFile | null>(null)
+
+// 云主机导入
+const cloudImportStep = ref(0)
+const cloudImportForm = reactive({
+  accountId: null as number | null,
+  region: '',
+  groupId: null as number | null
+})
+const cloudHostList = ref<any[]>([])
+const selectedCloudHosts = ref<any[]>([])
+const selectAllCloudHosts = ref(false)
+
+const selectedCloudAccount = ref<any>(null)
+const selectedCloudGroup = ref<any>(null)
+
+// 分组表单
+const groupForm = reactive({
+  id: 0,
+  parentId: null,
+  name: '',
+  code: '',
+  description: '',
+  sort: 0,
+  status: 1
+})
+
+// 表单验证规则
+const hostRules: FormRules = {
+  name: [{ required: true, message: '请输入主机名称', trigger: 'blur' }],
+  ip: [{ required: true, message: '请输入IP地址', trigger: 'blur' }],
+  sshUser: [{ required: true, message: '请输入SSH用户名', trigger: 'blur' }],
+  port: [{ required: true, message: '请输入SSH端口', trigger: 'blur' }]
+}
+
+const credentialRules: FormRules = {
+  name: [{ required: true, message: '请输入凭证名称', trigger: 'blur' }],
+  type: [{ required: true, message: '请选择认证方式', trigger: 'change' }],
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  privateKey: [{ required: true, message: '请输入私钥', trigger: 'blur' }]
+}
+
+const cloudAccountRules: FormRules = {
+  name: [{ required: true, message: '请输入账号名称', trigger: 'blur' }],
+  provider: [{ required: true, message: '请选择云厂商', trigger: 'change' }],
+  accessKey: [{ required: true, message: '请输入Access Key', trigger: 'blur' }],
+  secretKey: [{ required: true, message: '请输入Secret Key', trigger: 'blur' }]
+}
+
+const groupRules: FormRules = {
+  name: [{ required: true, message: '请输入分组名称', trigger: 'blur' }],
+  code: [{ required: true, message: '请输入分组编码', trigger: 'blur' }],
+  status: [{ required: true, message: '请选择状态', trigger: 'change' }]
+}
+
+// 分组树选项（用于表单中的选择器）
+const groupTreeOptions = computed(() => {
+  return buildTreeOptions(groupTree.value)
+})
+
+// 构建树形选项
+const buildTreeOptions = (nodes: any[]): any[] => {
+  return nodes.map(node => ({
+    id: node.id,
+    name: node.name,
+    children: node.children ? buildTreeOptions(node.children) : undefined
+  }))
+}
+
+// 过滤分组树
+const filterGroupTree = () => {
+  if (!groupSearchKeyword.value) {
+    filteredGroupTree.value = groupTree.value
+    return
+  }
+  filteredGroupTree.value = searchTreeNodes(groupTree.value, groupSearchKeyword.value)
+}
+
+// 递归搜索树节点
+const searchTreeNodes = (nodes: any[], keyword: string): any[] => {
+  const result: any[] = []
+  for (const node of nodes) {
+    const matchName = node.name?.toLowerCase().includes(keyword.toLowerCase())
+    let filteredChildren: any[] = []
+    if (node.children && node.children.length > 0) {
+      filteredChildren = searchTreeNodes(node.children, keyword)
+    }
+    if (matchName || filteredChildren.length > 0) {
+      result.push({
+        ...node,
+        children: filteredChildren.length > 0 ? filteredChildren : node.children
+      })
+    }
+  }
+  return result
+}
+
+// 展开/折叠全部
+const toggleExpandAll = () => {
+  isExpandAll.value = !isExpandAll.value
+  const allNodeKeys = getAllNodeKeys(filteredGroupTree.value)
+  if (isExpandAll.value) {
+    allNodeKeys.forEach(key => groupTreeRef.value?.store.nodesMap[key]?.expand())
+  } else {
+    allNodeKeys.forEach(key => groupTreeRef.value?.store.nodesMap[key]?.collapse())
+  }
+}
+
+// 获取所有节点key
+const getAllNodeKeys = (nodes: any[]): any[] => {
+  const keys: any[] = []
+  const traverse = (nodeList: any[]) => {
+    nodeList.forEach(node => {
+      keys.push(node.id)
+      if (node.children && node.children.length > 0) {
+        traverse(node.children)
+      }
+    })
+  }
+  traverse(nodes)
+  return keys
+}
+
+// 点击分组节点
+const handleGroupClick = (data: any) => {
+  selectedGroup.value = data
+  hostPagination.page = 1
+  loadHostList()
+}
+
+// 清除分组选择
+const clearGroupSelection = () => {
+  selectedGroup.value = null
+  groupTreeRef.value?.setCurrentKey(null)
+  hostPagination.page = 1
+  loadHostList()
+}
+
+// 获取分组路径
+const getGroupPath = (group: any): string => {
+  return group.name || '未知分组'
+}
+
+// 分组操作
+const handleGroupAction = (command: string, data: any) => {
+  if (command === 'edit') {
+    handleEditGroup(data)
+  } else if (command === 'delete') {
+    handleDeleteGroup(data)
+  }
+}
+
+// 获取状态颜色
+const getStatusColor = (status: number) => {
+  switch (status) {
+    case 1: return '#67c23a'
+    case 0: return '#909399'
+    default: return '#c0c4cc'
+  }
+}
+
+// 获取状态类型
+const getStatusType = (status: number) => {
+  switch (status) {
+    case 1: return 'success'
+    case 0: return 'info'
+    default: return ''
+  }
+}
+
+// 加载分组树
+const loadGroupTree = async () => {
+  groupLoading.value = true
+  try {
+    const data = await getGroupTree()
+    groupTree.value = data || []
+    filteredGroupTree.value = data || []
+  } catch (error) {
+    console.error('获取分组树失败:', error)
+    ElMessage.error('获取分组树失败')
+  } finally {
+    groupLoading.value = false
+  }
+}
+
+// 加载主机列表
+const loadHostList = async () => {
+  hostLoading.value = true
+  try {
+    const params: any = {
+      page: hostPagination.page,
+      pageSize: hostPagination.pageSize,
+      keyword: searchForm.keyword || undefined
+    }
+    if (searchForm.status !== undefined) {
+      params.status = searchForm.status
+    }
+
+    const res = await getHostList(params)
+    hostList.value = res.list || []
+    hostPagination.total = res.total || 0
+  } catch (error) {
+    console.error('获取主机列表失败:', error)
+    ElMessage.error('获取主机列表失败')
+  } finally {
+    hostLoading.value = false
+  }
+}
+
+// 加载凭证列表
+const loadCredentialList = async () => {
+  try {
+    const data = await getCredentials()
+    credentialList.value = data || []
+  } catch (error) {
+    console.error('获取凭证列表失败:', error)
+  }
+}
+
+// 加载云平台账号列表
+const loadCloudAccountList = async () => {
+  try {
+    const data = await getCloudAccounts()
+    cloudAccountList.value = data || []
+  } catch (error) {
+    console.error('获取云平台账号列表失败:', error)
+  }
+}
+
+// 搜索
+const handleSearch = () => {
+  hostPagination.page = 1
+  loadHostList()
+}
+
+// 重置
+const handleReset = () => {
+  searchForm.keyword = ''
+  searchForm.status = undefined
+  clearGroupSelection()
+}
+
+// 导入命令处理
+const handleImportCommand = (command: string) => {
+  if (command === 'direct') {
+    handleDirectImport()
+  } else if (command === 'excel') {
+    handleExcelImport()
+  } else if (command === 'cloud') {
+    handleCloudImport()
+  }
+}
+
+// 直接导入
+const handleDirectImport = async () => {
+  // 确保凭证列表已加载
+  await loadCredentialList()
+
+  Object.assign(hostForm, {
+    id: 0,
+    name: '',
+    groupId: selectedGroup.value?.id || null,
+    sshUser: 'root',
+    ip: '',
+    port: 22,
+    credentialId: null,
+    tags: '',
+    description: ''
+  })
+  directImportVisible.value = true
+}
+
+// 直接导入关闭
+const handleDirectImportClose = () => {
+  hostFormRef.value?.resetFields()
+}
+
+// 直接导入提交
+const handleDirectImportSubmit = async () => {
+  if (!hostFormRef.value) return
+  await hostFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    hostSubmitting.value = true
+    try {
+      // 判断是创建还是更新
+      if (hostForm.id && hostForm.id > 0) {
+        // 更新主机
+        await updateHost(hostForm.id, hostForm)
+        ElMessage.success('主机更新成功')
+      } else {
+        // 创建主机
+        await createHost(hostForm)
+        ElMessage.success('主机导入成功')
+      }
+      directImportVisible.value = false
+      loadHostList()
+      loadGroupTree()
+    } catch (error: any) {
+      ElMessage.error(error.message || '操作失败')
+    } finally {
+      hostSubmitting.value = false
+    }
+  })
+}
+
+// Excel导入
+const handleExcelImport = () => {
+  Object.assign(excelImportForm, {
+    groupId: selectedGroup.value?.id || null
+  })
+  uploadedFile.value = null
+  excelImportVisible.value = true
+}
+
+// 下载模板
+const downloadTemplate = () => {
+  // TODO: 实现Excel模板下载
+  ElMessage.info('模板下载功能开发中...')
+}
+
+// 文件变化
+const handleFileChange: UploadProps['onChange'] = (uploadFile) => {
+  uploadedFile.value = uploadFile
+}
+
+// Excel导入关闭
+const handleExcelImportClose = () => {
+  uploadedFile.value = null
+  uploadRef.value?.clearFiles()
+}
+
+// Excel导入提交
+const handleExcelImportSubmit = async () => {
+  if (!uploadedFile.value) {
+    ElMessage.warning('请先上传Excel文件')
+    return
+  }
+  // TODO: 实现Excel导入逻辑
+  ElMessage.info('Excel导入功能开发中...')
+}
+
+// 云主机导入
+const handleCloudImport = () => {
+  cloudImportStep.value = 0
+  cloudHostList.value = []
+  selectedCloudHosts.value = []
+  Object.assign(cloudImportForm, {
+    accountId: null,
+    region: '',
+    groupId: selectedGroup.value?.id || null
+  })
+  cloudImportVisible.value = true
+}
+
+// 获取云主机列表
+const handleGetCloudHosts = async () => {
+  if (!cloudImportForm.accountId) {
+    ElMessage.warning('请选择云平台账号')
+    return
+  }
+  if (!cloudImportForm.region) {
+    ElMessage.warning('请选择区域')
+    return
+  }
+
+  loadingCloudHosts.value = true
+  try {
+    // 模拟数据 - 实际应该调用云平台SDK
+    setTimeout(() => {
+      cloudHostList.value = [
+        {
+          instanceId: 'i-bp1234567890',
+          name: 'web-server-01',
+          publicIp: '47.97.123.45',
+          privateIp: '172.16.0.10',
+          os: 'CentOS 7.9 64位',
+          status: 'Running'
+        },
+        {
+          instanceId: 'i-bp1234567891',
+          name: 'web-server-02',
+          publicIp: '47.97.123.46',
+          privateIp: '172.16.0.11',
+          os: 'CentOS 7.9 64位',
+          status: 'Running'
+        },
+        {
+          instanceId: 'i-bp1234567892',
+          name: 'db-master',
+          publicIp: '47.97.123.47',
+          privateIp: '172.16.0.20',
+          os: 'Ubuntu 20.04 64位',
+          status: 'Running'
+        }
+      ]
+      selectedCloudAccount.value = cloudAccountList.value.find(a => a.id === cloudImportForm.accountId)
+      selectedCloudGroup.value = groupTree.value.find((g: any) => g.id === cloudImportForm.groupId)
+      loadingCloudHosts.value = false
+      cloudImportStep.value = 1
+    }, 1000)
+  } catch (error) {
+    console.error('获取云主机列表失败:', error)
+    ElMessage.error('获取云主机列表失败')
+    loadingCloudHosts.value = false
+  }
+}
+
+// 云主机选择变化
+const handleCloudHostSelectionChange = (selection: any[]) => {
+  selectedCloudHosts.value = selection
+}
+
+// 全选云主机
+const handleSelectAllCloudHosts = (checked: boolean) => {
+  // TODO: 实现全选逻辑
+}
+
+// 云主机导入关闭
+const handleCloudImportClose = () => {
+  cloudImportStep.value = 0
+  cloudHostList.value = []
+  selectedCloudHosts.value = []
+}
+
+// 云主机导入提交
+const handleCloudImportSubmit = async () => {
+  cloudImporting.value = true
+  try {
+    const data = {
+      accountId: cloudImportForm.accountId,
+      region: cloudImportForm.region,
+      groupId: cloudImportForm.groupId,
+      instanceIds: selectedCloudHosts.value.map(h => h.instanceId)
+    }
+    await importFromCloud(data)
+    ElMessage.success('云主机导入成功')
+    cloudImportVisible.value = false
+    loadHostList()
+    loadGroupTree()
+  } catch (error: any) {
+    ElMessage.error(error.message || '导入失败')
+  } finally {
+    cloudImporting.value = false
+  }
+}
+
+// 认证方式变化
+const handleAuthTypeChange = (type: string) => {
+  // 清空对应字段
+  if (type === 'password') {
+    credentialForm.privateKey = ''
+    credentialForm.passphrase = ''
+  } else {
+    credentialForm.password = ''
+  }
+}
+
+// 凭证对话框关闭
+const handleCredentialDialogClose = () => {
+  credentialFormRef.value?.resetFields()
+}
+
+// 提交凭证表单
+const handleCredentialSubmit = async () => {
+  if (!credentialFormRef.value) return
+  await credentialFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    credentialSubmitting.value = true
+    try {
+      await createCredential(credentialForm)
+      ElMessage.success('凭证创建成功')
+      showCredentialDialog.value = false
+      loadCredentialList()
+    } catch (error: any) {
+      ElMessage.error(error.message || '创建失败')
+    } finally {
+      credentialSubmitting.value = false
+    }
+  })
+}
+
+// 云平台账号对话框关闭
+const handleCloudAccountDialogClose = () => {
+  cloudAccountFormRef.value?.resetFields()
+}
+
+// 提交云平台账号表单
+const handleCloudAccountSubmit = async () => {
+  if (!cloudAccountFormRef.value) return
+  await cloudAccountFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    cloudAccountSubmitting.value = true
+    try {
+      await createCloudAccount(cloudAccountForm)
+      ElMessage.success('云平台账号添加成功')
+      showCloudAccountDialog.value = false
+      loadCloudAccountList()
+    } catch (error: any) {
+      ElMessage.error(error.message || '添加失败')
+    } finally {
+      cloudAccountSubmitting.value = false
+    }
+  })
+}
+
+// 编辑主机
+const handleEditHost = async (row: any) => {
+  // 重新加载凭证列表，确保显示最新的凭证
+  await loadCredentialList()
+
+  Object.assign(hostForm, {
+    id: row.id,
+    name: row.name,
+    groupId: row.groupId,
+    sshUser: row.sshUser,
+    ip: row.ip,
+    port: row.port,
+    credentialId: row.credentialId,
+    tags: Array.isArray(row.tags) ? row.tags.join(',') : row.tags,
+    description: row.description
+  })
+  directImportVisible.value = true
+}
+
+// 删除主机
+const handleDeleteHost = (row: any) => {
+  ElMessageBox.confirm(`确定要删除主机"${row.name}"吗？`, '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(async () => {
+    try {
+      await deleteHost(row.id)
+      ElMessage.success('删除成功')
+      loadHostList()
+      loadGroupTree()
+    } catch (error: any) {
+      ElMessage.error(error.message || '删除失败')
+    }
+  }).catch(() => {})
+}
+
+// 新增分组
+const handleAddGroup = () => {
+  Object.assign(groupForm, {
+    id: 0,
+    parentId: null,
+    name: '',
+    code: '',
+    description: '',
+    sort: 0,
+    status: 1
+  })
+  groupDialogTitle.value = '新增分组'
+  isGroupEdit.value = false
+  groupDialogVisible.value = true
+}
+
+// 编辑分组
+const handleEditGroup = (data: any) => {
+  Object.assign(groupForm, {
+    id: data.id,
+    parentId: data.parentId || null,
+    name: data.name,
+    code: data.code || '',
+    description: data.description || '',
+    sort: data.sort || 0,
+    status: data.status
+  })
+  groupDialogTitle.value = '编辑分组'
+  isGroupEdit.value = true
+  groupDialogVisible.value = true
+}
+
+// 删除分组
+const handleDeleteGroup = (data: any) => {
+  const hasChildren = data.children && data.children.length > 0
+  const confirmMsg = hasChildren
+    ? `该分组下有 ${data.children.length} 个子分组，确定要删除吗？`
+    : `确定要删除分组"${data.name}"吗？`
+
+  ElMessageBox.confirm(confirmMsg, '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(async () => {
+    try {
+      await deleteGroup(data.id)
+      ElMessage.success('删除成功')
+      loadGroupTree()
+      if (selectedGroup.value?.id === data.id) {
+        clearGroupSelection()
+      }
+    } catch (error: any) {
+      ElMessage.error(error.message || '删除失败')
+    }
+  }).catch(() => {})
+}
+
+// 提交分组表单
+const handleGroupSubmit = async () => {
+  if (!groupFormRef.value) return
+  await groupFormRef.value.validate(async (valid) => {
+    if (!valid) return
+    groupSubmitting.value = true
+    try {
+      const data = { ...groupForm }
+      if (isGroupEdit.value) {
+        await updateGroup(data.id, data)
+      } else {
+        await createGroup(data)
+      }
+      ElMessage.success(isGroupEdit.value ? '更新成功' : '创建成功')
+      groupDialogVisible.value = false
+      loadGroupTree()
+    } catch (error: any) {
+      ElMessage.error(error.message || (isGroupEdit.value ? '更新失败' : '创建失败'))
+    } finally {
+      groupSubmitting.value = false
+    }
+  })
+}
+
+// 分组对话框关闭
+const handleGroupDialogClose = () => {
+  groupFormRef.value?.resetFields()
+}
+
+// 格式化字节数
+const formatBytes = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 获取使用率颜色
+const getUsageColor = (usage: number): string => {
+  if (usage >= 90) return '#f56c6c'
+  if (usage >= 70) return '#e6a23c'
+  return '#67c23a'
+}
+
+// 采集主机信息
+const handleCollectHost = async (row: any) => {
+  try {
+    await collectHostInfo(row.id)
+    ElMessage.success('采集成功')
+    loadHostList()
+  } catch (error: any) {
+    ElMessage.error(error.message || '采集失败')
+  }
+}
+
+onMounted(() => {
+  loadGroupTree()
+  loadHostList()
+  loadCredentialList()
+  loadCloudAccountList()
+})
+</script>
+
+<style scoped>
+.hosts-page-container {
+  padding: 0;
+  background-color: transparent;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 页面头部 */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding: 16px 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+
+.page-title-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.page-title-icon {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #000 0%, #1a1a1a 100%);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #d4af37;
+  font-size: 22px;
+  flex-shrink: 0;
+  border: 1px solid #d4af37;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.3;
+}
+
+.page-subtitle {
+  margin: 4px 0 0 0;
+  font-size: 13px;
+  color: #909399;
+  line-height: 1.4;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.import-dropdown {
+  display: inline-block;
+}
+
+/* 主内容区域 */
+.main-content {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 左侧分组面板 */
+.left-panel {
+  width: 280px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.panel-header {
+  padding: 16px;
+  border-bottom: 1px solid #e4e7ed;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  color: #303133;
+}
+
+.panel-icon {
+  font-size: 18px;
+  color: #d4af37;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.panel-body {
+  flex: 1;
+  padding: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.group-search {
+  margin-bottom: 12px;
+}
+
+.group-search :deep(.el-input__wrapper) {
+  border-radius: 20px;
+}
+
+.tree-container {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.group-tree {
+  background: transparent;
+}
+
+.group-tree :deep(.el-tree-node__content) {
+  border-radius: 6px;
+  padding: 6px 8px;
+  transition: all 0.2s ease;
+}
+
+.group-tree :deep(.el-tree-node__content:hover) {
+  background-color: #f5f7fa;
+}
+
+.group-tree :deep(.is-current > .el-tree-node__content) {
+  background-color: #ecf5ff;
+  color: #409eff;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  width: 0;
+}
+
+.node-icon {
+  flex-shrink: 0;
+}
+
+.node-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-count {
+  font-size: 12px;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.node-actions {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.group-tree :deep(.el-tree-node__content:hover) .node-actions {
+  opacity: 1;
+}
+
+.more-icon {
+  font-size: 14px;
+  cursor: pointer;
+  color: #909399;
+}
+
+.more-icon:hover {
+  color: #409eff;
+}
+
+/* 右侧主机列表面板 */
+.right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.filter-bar {
+  padding: 12px 16px;
+  background: #fff;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.filter-inputs {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+}
+
+.filter-input {
+  width: 220px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.filter-bar :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  border: 1px solid #dcdfe6;
+  transition: all 0.3s ease;
+}
+
+.filter-bar :deep(.el-input__wrapper:hover) {
+  border-color: #d4af37;
+}
+
+.filter-bar :deep(.el-input__wrapper.is-focus) {
+  border-color: #d4af37;
+}
+
+.search-icon {
+  color: #d4af37;
+}
+
+.reset-btn {
+  background: #f5f7fa;
+  border-color: #dcdfe6;
+  color: #606266;
+}
+
+.reset-btn:hover {
+  background: #e6e8eb;
+  border-color: #c0c4cc;
+}
+
+.selected-group-bar {
+  padding: 10px 16px;
+  background: #f0f9ff;
+  border-bottom: 1px solid #e4e7ed;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.group-path {
+  color: #409eff;
+  font-weight: 500;
+}
+
+.table-wrapper {
+  flex: 1;
+  background: #fff;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modern-table {
+  flex: 1;
+}
+
+.modern-table :deep(.el-table__body-wrapper) {
+  overflow-y: auto;
+}
+
+.modern-table :deep(.el-table__row) {
+  transition: background-color 0.2s ease;
+}
+
+.modern-table :deep(.el-table__row:hover) {
+  background-color: #f8fafc !important;
+}
+
+.hostname-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.host-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.hostname {
+  font-weight: 500;
+  color: #303133;
+}
+
+.ip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.config-info {
+  font-size: 13px;
+  color: #606266;
+}
+
+.text-muted {
+  color: #c0c4cc;
+}
+
+.pagination-wrapper {
+  padding: 12px 16px;
+  border-top: 1px solid #f0f0f0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 操作按钮 */
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.action-btn :deep(.el-icon) {
+  font-size: 14px;
+}
+
+.action-btn:hover {
+  transform: scale(1.1);
+}
+
+.action-edit:hover {
+  background-color: #e8f4ff;
+  color: #409eff;
+}
+
+.action-delete:hover {
+  background-color: #fee;
+  color: #f56c6c;
+}
+
+.black-button {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border-color: #000000 !important;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 500;
+}
+
+.black-button:hover {
+  background-color: #333333 !important;
+  border-color: #333333 !important;
+}
+
+/* 对话框样式 */
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+:deep(.host-import-dialog),
+:deep(.excel-import-dialog),
+:deep(.cloud-import-dialog),
+:deep(.credential-dialog),
+:deep(.cloud-account-dialog),
+:deep(.group-edit-dialog) {
+  border-radius: 12px;
+}
+
+:deep(.host-import-dialog .el-dialog__header),
+:deep(.excel-import-dialog .el-dialog__header),
+:deep(.cloud-import-dialog .el-dialog__header),
+:deep(.credential-dialog .el-dialog__header),
+:deep(.cloud-account-dialog .el-dialog__header),
+:deep(.group-edit-dialog .el-dialog__header) {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+:deep(.host-import-dialog .el-dialog__body),
+:deep(.excel-import-dialog .el-dialog__body),
+:deep(.cloud-import-dialog .el-dialog__body),
+:deep(.credential-dialog .el-dialog__body),
+:deep(.cloud-account-dialog .el-dialog__body),
+:deep(.group-edit-dialog .el-dialog__body) {
+  padding: 24px;
+}
+
+:deep(.host-import-dialog .el-dialog__footer),
+:deep(.excel-import-dialog .el-dialog__footer),
+:deep(.cloud-import-dialog .el-dialog__footer),
+:deep(.credential-dialog .el-dialog__footer),
+:deep(.cloud-account-dialog .el-dialog__footer),
+:deep(.group-edit-dialog .el-dialog__footer) {
+  padding: 16px 24px;
+  border-top: 1px solid #f0f0f0;
+}
+
+:deep(.el-tag) {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-weight: 500;
+}
+
+:deep(.responsive-dialog) {
+  max-width: 1200px;
+  min-width: 500px;
+}
+
+@media (max-width: 768px) {
+  :deep(.responsive-dialog .el-dialog) {
+    width: 95% !important;
+    max-width: none;
+    min-width: auto;
+  }
+}
+
+/* Excel导入样式 */
+.excel-import-content {
+  padding: 10px 0;
+}
+
+.upload-demo {
+  width: 100%;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: #f5f7fa;
+  border-radius: 6px;
+}
+
+/* 云主机导入样式 */
+.cloud-step-content {
+  padding: 20px 0;
+  min-height: 300px;
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 6px;
+}
+
+.import-summary {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.host-list-preview {
+  margin-top: 20px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 6px;
+}
+
+.host-list-preview h4 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: #606266;
+}
+
+/* 资源显示单元格样式 */
+.resource-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+
+.resource-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 0 8px;
+}
+
+.resource-label {
+  font-size: 12px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.resource-info :deep(.el-progress) {
+  margin: 0;
+}
+
+.resource-info :deep(.el-progress__text) {
+  font-size: 11px !important;
+  min-width: 30px;
+}
+
+/* 进程/端口单元格样式 */
+.process-port-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.process-port-cell .item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.process-port-cell .item .el-icon {
+  font-size: 14px;
+  color: #909399;
+}
+
+/* 配置单元格样式 */
+.config-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+
+.config-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0 8px;
+}
+
+.config-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-item .el-icon {
+  font-size: 12px;
+  color: #909399;
+  flex-shrink: 0;
+}
+
+.config-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 标签单元格样式 */
+.tags-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.tags-cell .tag-item {
+  font-size: 11px;
+  padding: 2px 6px;
+  height: auto;
+}
+
+.action-refresh:hover {
+  background-color: #e8f4ff;
+  color: #409eff;
+}
+
+/* 凭证单元格样式 */
+.credential-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.credential-name {
+  font-size: 12px;
+  color: #303133;
+  font-weight: 500;
+}
+
+.text-danger {
+  color: #f56c6c !important;
+}
+</style>

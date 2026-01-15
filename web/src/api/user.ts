@@ -30,6 +30,11 @@ export const assignUserRoles = (id: number, roleIds: number[]) => {
   return request.post(`/api/v1/users/${id}/roles`, { roleIds })
 }
 
+// 分配用户岗位
+export const assignUserPositions = (id: number, positionIds: number[]) => {
+  return request.post(`/api/v1/users/${id}/positions`, { positionIds })
+}
+
 // 重置用户密码
 export const resetUserPassword = (id: number, password: string) => {
   return request.put(`/api/v1/users/${id}/reset-password`, { password })

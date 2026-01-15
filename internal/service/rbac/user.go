@@ -12,8 +12,9 @@ import (
 )
 
 type UserService struct {
-	userUseCase *rbac.UserUseCase
-	authService *AuthService
+	userUseCase    *rbac.UserUseCase
+	authService    *AuthService
+	captchaService *CaptchaService
 }
 
 func NewUserService(userUseCase *rbac.UserUseCase, authService *AuthService) *UserService {
@@ -23,10 +24,18 @@ func NewUserService(userUseCase *rbac.UserUseCase, authService *AuthService) *Us
 	}
 }
 
+// SetCaptchaService 设置验证码服务（通过依赖注入）
+func (s *UserService) SetCaptchaService(captchaService *CaptchaService) {
+	s.captchaService = captchaService
+}
+
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username   string `json:"username" binding:"required"`
+	Password   string `json:"password" binding:"required"`
+	CaptchaId  string `json:"captchaId"`
+	CaptchaId2 string `json:"captchaId2"` // 兼容前端可能的字段名
+	CaptchaCode string `json:"captchaCode"`
 }
 
 // LoginResponse 登录响应
@@ -55,15 +64,38 @@ func (s *UserService) Login(c *gin.Context) {
 	// 添加调试日志
 	appLogger.Info("用户登录尝试", zap.String("username", req.Username))
 
+	// 验证验证码
+	captchaId := req.CaptchaId
+	if captchaId == "" {
+		captchaId = req.CaptchaId2
+	}
+
+	if captchaId == "" || req.CaptchaCode == "" {
+		response.ErrorCode(c, http.StatusOK, "请输入验证码")
+		return
+	}
+
+	// 使用验证码服务验证
+	if s.captchaService == nil {
+		response.ErrorCode(c, http.StatusOK, "验证码服务未初始化")
+		return
+	}
+
+	if !s.captchaService.VerifyCaptchaDirect(captchaId, req.CaptchaCode) {
+		appLogger.Info("验证码验证失败", zap.String("username", req.Username), zap.String("captchaId", captchaId))
+		response.ErrorCode(c, http.StatusOK, "验证码错误，请重新输入")
+		return
+	}
+
 	user, err := s.userUseCase.ValidatePassword(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		appLogger.Error("登录失败", zap.String("username", req.Username), zap.Error(err))
-		response.ErrorCode(c, http.StatusUnauthorized, err.Error())
+		response.ErrorCode(c, http.StatusOK, err.Error())
 		return
 	}
 
 	if user.Status != 1 {
-		response.ErrorCode(c, http.StatusForbidden, "用户已被禁用")
+		response.ErrorCode(c, http.StatusOK, "用户已被禁用")
 		return
 	}
 
@@ -200,7 +232,17 @@ func (s *UserService) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, req)
+	// 重新获取完整的用户数据，包含Roles和Positions
+	user, err := s.userUseCase.GetByID(c.Request.Context(), uint(id))
+	if err != nil {
+		response.ErrorCode(c, http.StatusInternalServerError, "获取用户信息失败")
+		return
+	}
+
+	// 清空密码字段，防止返回给前端
+	user.Password = ""
+
+	response.Success(c, user)
 }
 
 // DeleteUser 删除用户
@@ -246,8 +288,9 @@ func (s *UserService) ListUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
 	keyword := c.Query("keyword")
+	departmentID, _ := strconv.ParseUint(c.Query("departmentId"), 10, 32)
 
-	users, total, err := s.userUseCase.List(c.Request.Context(), page, pageSize, keyword)
+	users, total, err := s.userUseCase.List(c.Request.Context(), page, pageSize, keyword, uint(departmentID))
 	if err != nil {
 		response.ErrorCode(c, http.StatusInternalServerError, "查询失败: "+err.Error())
 		return
@@ -286,6 +329,33 @@ func (s *UserService) AssignUserRoles(c *gin.Context) {
 	}
 
 	if err := s.userUseCase.AssignRoles(c.Request.Context(), uint(id), req.RoleIDs); err != nil {
+		response.ErrorCode(c, http.StatusInternalServerError, "分配失败: "+err.Error())
+		return
+	}
+
+	response.Success(c, nil)
+}
+
+// AssignUserPositions 分配用户岗位
+type AssignUserPositionsRequest struct {
+	PositionIDs []uint `json:"positionIds"`
+}
+
+func (s *UserService) AssignUserPositions(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		response.ErrorCode(c, http.StatusBadRequest, "无效的用户ID")
+		return
+	}
+
+	var req AssignUserPositionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ErrorCode(c, http.StatusBadRequest, "参数错误: "+err.Error())
+		return
+	}
+
+	if err := s.userUseCase.AssignPositions(c.Request.Context(), uint(id), req.PositionIDs); err != nil {
 		response.ErrorCode(c, http.StatusInternalServerError, "分配失败: "+err.Error())
 		return
 	}

@@ -106,9 +106,9 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="700px"
+      width="55%"
+      class="user-dialog responsive-dialog"
       @close="handleDialogClose"
-      class="user-dialog"
     >
       <el-form :model="userForm" :rules="rules" ref="formRef" label-width="80px" class="user-form">
         <!-- 基本信息 -->
@@ -222,9 +222,9 @@
           >
             <el-option
               v-for="pos in positionOptions"
-              :key="'pos-' + pos.ID"
+              :key="'pos-' + (pos.ID || pos.id)"
               :label="pos.postName"
-              :value="pos.ID"
+              :value="pos.ID || pos.id"
             />
           </el-select>
         </el-form-item>
@@ -285,7 +285,8 @@
     <el-dialog
       v-model="resetPasswordVisible"
       title="重置密码"
-      width="500px"
+      width="40%"
+      class="responsive-dialog"
       @close="handleResetPasswordClose"
     >
       <el-form :model="resetPasswordForm" :rules="resetPasswordRules" ref="resetPasswordFormRef" label-width="100px">
@@ -309,13 +310,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox, FormInstance } from 'element-plus'
 import {
   User, Postcard, Message, Phone, Lock,
   OfficeBuilding, Key, Document, Check
 } from '@element-plus/icons-vue'
-import { getUserList, createUser, updateUser, deleteUser, resetUserPassword, assignUserRoles } from '@/api/user'
+import { getUserList, createUser, updateUser, deleteUser, resetUserPassword, assignUserRoles, assignUserPositions } from '@/api/user'
 import { getDepartmentTree } from '@/api/department'
 import { getAllRoles } from '@/api/role'
 import { getPositionList } from '@/api/position'
@@ -467,12 +468,28 @@ const loadRoleOptions = async () => {
 // 加载岗位选项
 const loadPositionOptions = async () => {
   try {
+    console.log('=== 加载岗位选项 ===')
     positionOptions.value = []  // 先清空
     const res = await getPositionList({ page: 1, pageSize: 1000 })
-    positionOptions.value = res.list || []
+    const list = res.list || []
+    console.log('API返回的岗位数据:', res)
+    console.log('岗位列表:', list)
+    if (list.length > 0) {
+      console.log('第一个岗位数据:', list[0])
+      console.log('第一个岗位的ID:', list[0].ID || list[0].id)
+      console.log('第一个岗位的postName:', list[0].postName)
+    }
+    positionOptions.value = list
   } catch (error) {
-    console.error(error)
+    console.error('加载岗位失败:', error)
   }
+}
+
+// 岗位选择变化
+const handlePositionChange = (value: any) => {
+  console.log('=== 岗位选择变化 ===')
+  console.log('新值:', value)
+  console.log('userForm.positionIds:', userForm.positionIds)
 }
 
 // 构建部门路径
@@ -538,10 +555,19 @@ const handleEdit = (row: any) => {
   console.log('row.roleIds:', row.roleIds)
   console.log('row.roles:', row.roles)
   console.log('row.roles 长度:', row.roles?.length)
+  console.log('row.positionIds:', row.positionIds)
+  console.log('row.positions:', row.positions)
+  console.log('row.positions 长度:', row.positions?.length)
   if (row.roles && Array.isArray(row.roles)) {
     console.log('row.roles 详细内容:', JSON.stringify(row.roles, null, 2))
     row.roles.forEach((r: any, index: number) => {
       console.log(`角色${index}:`, r, 'ID:', r.ID || r.id, 'Name:', r.name)
+    })
+  }
+  if (row.positions && Array.isArray(row.positions)) {
+    console.log('row.positions 详细内容:', JSON.stringify(row.positions, null, 2))
+    row.positions.forEach((p: any, index: number) => {
+      console.log(`岗位${index}:`, p, 'ID:', p.ID || p.id, 'Name:', p.postName)
     })
   }
   console.log('========================')
@@ -554,7 +580,15 @@ const handleEdit = (row: any) => {
   userForm.phone = row.phone || ''
   userForm.status = row.status ?? 1
   userForm.departmentId = row.departmentId ? Number(row.departmentId) : null
-  userForm.positionIds = (row.positionIds || []).map((id: any) => Number(id))
+
+  // 处理岗位ID
+  if (row.positionIds && Array.isArray(row.positionIds)) {
+    userForm.positionIds = row.positionIds.map((id: any) => Number(id))
+  } else if (row.positions && Array.isArray(row.positions) && row.positions.length > 0) {
+    userForm.positionIds = row.positions.map((p: any) => Number(p.ID || p.id))
+  } else {
+    userForm.positionIds = []
+  }
 
   // 处理角色ID
   if (row.roleIds && Array.isArray(row.roleIds)) {
@@ -566,6 +600,7 @@ const handleEdit = (row: any) => {
   }
 
   console.log('最终 userForm.roleIds:', userForm.roleIds)
+  console.log('最终 userForm.positionIds:', userForm.positionIds)
 
   userForm.bio = row.bio || ''
   dialogVisible.value = true
@@ -630,20 +665,32 @@ const handleSubmit = async () => {
     if (valid) {
       submitLoading.value = true
       try {
-        // 保存角色ID，以便后续分配角色
-        const roleIds = userForm.roleIds
+        // 保存角色ID和岗位ID，过滤掉null值
+        const roleIds = (userForm.roleIds || []).filter((id: any) => id != null)
+        const positionIds = (userForm.positionIds || []).filter((id: any) => id != null)
+
+        console.log('提交的数据:', {
+          roleIds,
+          positionIds,
+          rawPositionIds: userForm.positionIds
+        })
 
         if (isEdit.value) {
-          // 更新用户基本信息
-          await updateUser(userForm.id, userForm)
-
-          // 分配角色
-          if (roleIds && roleIds.length > 0) {
-            await assignUserRoles(userForm.id, roleIds)
+          // 清理userForm中的null值，避免发送到后端
+          const userData = {
+            ...userForm,
+            positionIds: positionIds,
+            roleIds: roleIds
           }
 
-          // TODO: 分配岗位需要后端添加相应的API
-          // 目前岗位关联是通过岗位来分配用户的，不是通过用户来分配岗位
+          // 更新用户基本信息
+          await updateUser(userForm.id, userData)
+
+          // 分配角色（传空数组表示清空角色）
+          await assignUserRoles(userForm.id, roleIds)
+
+          // 分配岗位（传空数组表示清空岗位）
+          await assignUserPositions(userForm.id, positionIds)
 
           ElMessage.success('更新成功')
         } else {
@@ -651,7 +698,7 @@ const handleSubmit = async () => {
           await createUser(userForm)
 
           // 分配角色
-          if (roleIds && roleIds.length > 0) {
+          if (roleIds.length > 0) {
             // 获取刚创建的用户ID，这里需要从响应中获取
             // 暂时先跳过，需要后端返回创建的用户ID
           }
@@ -687,6 +734,18 @@ const handleDialogClose = () => {
     bio: ''
   })
 }
+
+// 监控岗位选项和选择的变化
+watch(positionOptions, (newVal) => {
+  console.log('=== positionOptions 变化 ===')
+  console.log('新值:', newVal)
+}, { deep: true })
+
+watch(() => userForm.positionIds, (newVal) => {
+  console.log('=== userForm.positionIds 变化 ===')
+  console.log('新值:', newVal)
+  console.log('类型:', typeof newVal)
+})
 
 onMounted(() => {
   loadDepartmentTree()
@@ -750,6 +809,7 @@ onMounted(() => {
   padding: 12px;
   overflow-y: auto;
   background-color: #fafafa;
+  font-size: 15px;
 }
 
 .custom-tree-node {
@@ -765,11 +825,12 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 15px;
 }
 
 .node-count {
   color: #909399;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 /* 右侧用户列表面板 */
@@ -889,5 +950,19 @@ onMounted(() => {
 /* 输入框图标样式 */
 .user-form :deep(.el-input__prefix) {
   color: #a8abb2;
+}
+
+/* 响应式对话框 */
+:deep(.responsive-dialog) {
+  max-width: 1200px;
+  min-width: 400px;
+}
+
+@media (max-width: 768px) {
+  :deep(.responsive-dialog .el-dialog) {
+    width: 95% !important;
+    max-width: none;
+    min-width: auto;
+  }
 }
 </style>

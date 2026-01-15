@@ -1,0 +1,660 @@
+package asset
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ydcloud-dy/opshub/pkg/collector"
+	sshclient "github.com/ydcloud-dy/opshub/pkg/ssh"
+	"github.com/ydcloud-dy/opshub/pkg/utils"
+)
+
+type HostUseCase struct {
+	hostRepo       HostRepo
+	credentialRepo CredentialRepo
+	groupRepo      AssetGroupRepo
+	cloudRepo      CloudAccountRepo
+}
+
+func NewHostUseCase(hostRepo HostRepo, credentialRepo CredentialRepo, groupRepo AssetGroupRepo, cloudRepo CloudAccountRepo) *HostUseCase {
+	return &HostUseCase{
+		hostRepo:       hostRepo,
+		credentialRepo: credentialRepo,
+		groupRepo:      groupRepo,
+		cloudRepo:      cloudRepo,
+	}
+}
+
+// Create 创建主机
+func (uc *HostUseCase) Create(ctx context.Context, req *HostRequest) (*Host, error) {
+	// 检查IP是否已存在
+	existHost, err := uc.hostRepo.GetByIP(ctx, req.IP)
+	if err == nil && existHost != nil {
+		return nil, fmt.Errorf("IP地址 %s 已存在", req.IP)
+	}
+
+	host := req.ToModel()
+
+	if err := uc.hostRepo.Create(ctx, host); err != nil {
+		return nil, err
+	}
+
+	return host, nil
+}
+
+// Update 更新主机
+func (uc *HostUseCase) Update(ctx context.Context, req *HostRequest) error {
+	host, err := uc.hostRepo.GetByID(ctx, req.ID)
+	if err != nil {
+		return fmt.Errorf("主机不存在")
+	}
+
+	// 检查IP是否被其他主机使用
+	existHost, err := uc.hostRepo.GetByIP(ctx, req.IP)
+	if err == nil && existHost != nil && existHost.ID != req.ID {
+		return fmt.Errorf("IP地址 %s 已被其他主机使用", req.IP)
+	}
+
+	host.Name = req.Name
+	host.GroupID = req.GroupID
+	host.SSHUser = req.SSHUser
+	host.IP = req.IP
+	host.Port = req.Port
+	host.CredentialID = req.CredentialID
+	host.Tags = req.Tags
+	host.Description = req.Description
+
+	return uc.hostRepo.Update(ctx, host)
+}
+
+// Delete 删除主机
+func (uc *HostUseCase) Delete(ctx context.Context, id uint) error {
+	return uc.hostRepo.Delete(ctx, id)
+}
+
+// GetByID 根据ID获取主机详情
+func (uc *HostUseCase) GetByID(ctx context.Context, id uint) (*HostInfoVO, error) {
+	host, err := uc.hostRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	vo := uc.toInfoVO(host)
+
+	// 加载分组信息
+	if host.GroupID > 0 {
+		group, err := uc.groupRepo.GetByID(ctx, host.GroupID)
+		if err == nil && group != nil {
+			vo.GroupName = group.Name
+		}
+	}
+
+	// 加载凭证信息
+	if host.CredentialID > 0 {
+		credential, err := uc.credentialRepo.GetByID(ctx, host.CredentialID)
+		if err == nil && credential != nil {
+			vo.Credential = uc.toCredentialVO(credential)
+		}
+	}
+
+	return vo, nil
+}
+
+// List 分页查询主机列表
+func (uc *HostUseCase) List(ctx context.Context, page, pageSize int, keyword string) ([]*HostInfoVO, int64, error) {
+	hosts, total, err := uc.hostRepo.List(ctx, page, pageSize, keyword)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var vos []*HostInfoVO
+	for _, host := range hosts {
+		vo := uc.toInfoVO(host)
+
+		// 加载分组信息
+		if host.GroupID > 0 {
+			group, err := uc.groupRepo.GetByID(ctx, host.GroupID)
+			if err == nil && group != nil {
+				vo.GroupName = group.Name
+			}
+		}
+
+		// 加载凭证信息
+		if host.CredentialID > 0 {
+			credential, err := uc.credentialRepo.GetByID(ctx, host.CredentialID)
+			if err == nil && credential != nil {
+				vo.Credential = uc.toCredentialVO(credential)
+			}
+		}
+
+		vos = append(vos, vo)
+	}
+
+	return vos, total, nil
+}
+
+// toInfoVO 转换为InfoVO
+func (uc *HostUseCase) toInfoVO(host *Host) *HostInfoVO {
+	statusText := "未知"
+	if host.Status == 1 {
+		statusText = "在线"
+	} else if host.Status == 0 {
+		statusText = "离线"
+	}
+
+	var tags []string
+	if host.Tags != "" {
+		tags = strings.Split(host.Tags, ",")
+	}
+
+	var lastSeen string
+	if host.LastSeen != nil {
+		lastSeen = host.LastSeen.Format("2006-01-02 15:04:05")
+	}
+
+	return &HostInfoVO{
+		ID:           host.ID,
+		Name:         host.Name,
+		GroupID:      host.GroupID,
+		SSHUser:      host.SSHUser,
+		IP:           host.IP,
+		Port:         host.Port,
+		CredentialID: host.CredentialID,
+		Tags:         tags,
+		Description:  host.Description,
+		Status:       host.Status,
+		StatusText:   statusText,
+		LastSeen:     lastSeen,
+		OS:           host.OS,
+		Kernel:       host.Kernel,
+		Arch:         host.Arch,
+		CreateTime:   host.CreatedAt.Format("2006-01-02 15:04:05"),
+		UpdateTime:   host.UpdatedAt.Format("2006-01-02 15:04:05"),
+		// 扩展信息
+		CPUCores:     host.CPUCores,
+		CPUUsage:     host.CPUUsage,
+		MemoryTotal:  host.MemoryTotal,
+		MemoryUsed:   host.MemoryUsed,
+		MemoryUsage:  host.MemoryUsage,
+		DiskTotal:    host.DiskTotal,
+		DiskUsed:     host.DiskUsed,
+		DiskUsage:    host.DiskUsage,
+		ProcessCount: host.ProcessCount,
+		PortCount:    host.PortCount,
+		Uptime:       host.Uptime,
+		Hostname:     host.Hostname,
+	}
+}
+
+// CollectHostInfo 采集主机信息
+func (uc *HostUseCase) CollectHostInfo(ctx context.Context, hostID uint) error {
+	host, err := uc.hostRepo.GetByID(ctx, hostID)
+	if err != nil {
+		return fmt.Errorf("获取主机信息失败: %w", err)
+	}
+
+	// 如果没有配置凭证，无法连接
+	if host.CredentialID == 0 {
+		return fmt.Errorf("主机未配置凭证")
+	}
+
+	// 获取凭证（解密后的）
+	credential, err := uc.credentialRepo.GetByIDDecrypted(ctx, host.CredentialID)
+	if err != nil {
+		return fmt.Errorf("获取凭证失败: %w", err)
+	}
+
+	// 创建SSH客户端
+	sshClient, err := uc.createSSHClient(host, credential)
+	if err != nil {
+		// 连接失败，更新主机状态为离线
+		host.Status = 0
+		uc.hostRepo.Update(ctx, host)
+		return fmt.Errorf("创建SSH连接失败: %w", err)
+	}
+	defer sshClient.Close()
+
+	// 创建采集器
+	c := collector.NewCollector(sshClient)
+
+	// 采集所有信息
+	info, err := c.CollectAll()
+	if err != nil {
+		return fmt.Errorf("采集主机信息失败: %w", err)
+	}
+
+	// 更新主机信息
+	now := time.Now()
+	host.OS = info.OS
+	host.Kernel = info.Kernel
+	host.Arch = info.Arch
+	host.CPUCores = info.CPU.Cores
+	host.CPUUsage = info.CPU.Usage
+	host.MemoryTotal = info.Memory.Total
+	host.MemoryUsed = info.Memory.Used
+	host.MemoryUsage = info.Memory.Usage
+	host.ProcessCount = info.ProcessCount
+	host.PortCount = info.PortCount
+	host.Uptime = info.Uptime
+	host.Hostname = info.Hostname
+	host.Status = 1 // 在线
+	host.LastSeen = &now
+
+	// 计算磁盘总容量和使用量
+	var diskTotal, diskUsed uint64
+	if len(info.Disk) > 0 {
+		for _, disk := range info.Disk {
+			diskTotal += disk.Total
+			diskUsed += disk.Used
+		}
+	}
+	host.DiskTotal = diskTotal
+	host.DiskUsed = diskUsed
+	if diskTotal > 0 {
+		host.DiskUsage = float64(diskUsed) / float64(diskTotal) * 100
+	}
+
+	// 保存CPU详细信息为JSON
+	if cpuJSON, err := info.CPU.ToJSON(); err == nil {
+		host.CPUInfo = cpuJSON
+	}
+
+	return uc.hostRepo.Update(ctx, host)
+}
+
+// createSSHClient 创建SSH客户端
+func (uc *HostUseCase) createSSHClient(host *Host, credential *Credential) (*sshclient.Client, error) {
+	var privateKey []byte
+
+	// 检查凭证信息是否完整
+	if credential.Type == "password" && credential.Password == "" {
+		return nil, fmt.Errorf("凭证类型为密码认证，但未填写密码")
+	}
+	if credential.Type == "key" && credential.PrivateKey == "" {
+		return nil, fmt.Errorf("凭证类型为密钥认证，但未填写私钥")
+	}
+
+	// 如果是密钥认证，需要解密私钥
+	if credential.Type == "key" && credential.PrivateKey != "" {
+		// 这里私钥是从数据库读取的加密数据，需要先解密
+		// 但在credentialRepo中已经返回了解密后的数据
+		// 实际上我们需要修改CredentialRepo的GetByID方法来返回解密后的数据
+		// 或者在这里解密
+		privateKey = []byte(credential.PrivateKey)
+	}
+
+	return sshclient.NewClient(
+		host.IP,
+		host.Port,
+		host.SSHUser,
+		credential.Password,
+		privateKey,
+		credential.Passphrase,
+	)
+}
+
+// TestConnection 测试主机连接
+func (uc *HostUseCase) TestConnection(ctx context.Context, hostID uint) error {
+	host, err := uc.hostRepo.GetByID(ctx, hostID)
+	if err != nil {
+		return fmt.Errorf("获取主机信息失败: %w", err)
+	}
+
+	// 如果没有配置凭证，无法连接
+	if host.CredentialID == 0 {
+		return fmt.Errorf("主机未配置凭证")
+	}
+
+	// 获取凭证（解密后的）
+	credential, err := uc.credentialRepo.GetByIDDecrypted(ctx, host.CredentialID)
+	if err != nil {
+		return fmt.Errorf("获取凭证失败: %w", err)
+	}
+
+	// 创建SSH客户端
+	sshClient, err := uc.createSSHClient(host, credential)
+	if err != nil {
+		return fmt.Errorf("创建SSH连接失败: %w", err)
+	}
+	defer sshClient.Close()
+
+	// 测试连接
+	if err := sshClient.TestConnection(); err != nil {
+		return fmt.Errorf("连接测试失败: %w", err)
+	}
+
+	return nil
+}
+
+// BatchCollectHostInfo 批量采集主机信息
+func (uc *HostUseCase) BatchCollectHostInfo(ctx context.Context, hostIDs []uint) error {
+	for _, hostID := range hostIDs {
+		if err := uc.CollectHostInfo(ctx, hostID); err != nil {
+			// 记录错误但继续处理其他主机
+			fmt.Printf("采集主机 %d 信息失败: %v\n", hostID, err)
+		}
+	}
+	return nil
+}
+
+// toCredentialVO 转换为CredentialVO
+func (uc *HostUseCase) toCredentialVO(credential *Credential) *CredentialVO {
+	typeText := "密码"
+	if credential.Type == "key" {
+		typeText = "密钥"
+	}
+
+	return &CredentialVO{
+		ID:          credential.ID,
+		Name:        credential.Name,
+		Type:        credential.Type,
+		TypeText:    typeText,
+		Username:    credential.Username,
+		Description: credential.Description,
+		CreateTime:  credential.CreatedAt.Format("2006-01-02 15:04:05"),
+	}
+}
+
+// CredentialUseCase 凭证用例
+type CredentialUseCase struct {
+	repo CredentialRepo
+}
+
+func NewCredentialUseCase(repo CredentialRepo) *CredentialUseCase {
+	return &CredentialUseCase{repo: repo}
+}
+
+// Create 创建凭证
+func (uc *CredentialUseCase) Create(ctx context.Context, req *CredentialRequest) (*Credential, error) {
+	credential := req.ToModel()
+
+	if err := uc.repo.Create(ctx, credential); err != nil {
+		return nil, err
+	}
+
+	return credential, nil
+}
+
+// Update 更新凭证
+func (uc *CredentialUseCase) Update(ctx context.Context, req *CredentialRequest) error {
+	credential, err := uc.repo.GetByID(ctx, req.ID)
+	if err != nil {
+		return fmt.Errorf("凭证不存在")
+	}
+
+	credential.Name = req.Name
+	credential.Type = req.Type
+	credential.Username = req.Username
+	credential.Description = req.Description
+
+	// 如果提供了新的密码或私钥，更新它们
+	if req.Password != "" {
+		credential.Password = req.Password
+	}
+	if req.PrivateKey != "" {
+		credential.PrivateKey = req.PrivateKey
+	}
+	if req.Passphrase != "" {
+		credential.Passphrase = req.Passphrase
+	}
+
+	return uc.repo.Update(ctx, credential)
+}
+
+// Delete 删除凭证
+func (uc *CredentialUseCase) Delete(ctx context.Context, id uint) error {
+	return uc.repo.Delete(ctx, id)
+}
+
+// GetByID 根据ID获取凭证
+func (uc *CredentialUseCase) GetByID(ctx context.Context, id uint) (*Credential, error) {
+	return uc.repo.GetByID(ctx, id)
+}
+
+// List 分页查询凭证列表
+func (uc *CredentialUseCase) List(ctx context.Context, page, pageSize int, keyword string) ([]*CredentialVO, int64, error) {
+	credentials, total, err := uc.repo.List(ctx, page, pageSize, keyword)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var vos []*CredentialVO
+	for _, cred := range credentials {
+		typeText := "密码"
+		if cred.Type == "key" {
+			typeText = "密钥"
+		}
+
+		vo := &CredentialVO{
+			ID:          cred.ID,
+			Name:        cred.Name,
+			Type:        cred.Type,
+			TypeText:    typeText,
+			Username:    cred.Username,
+			Description: cred.Description,
+			CreateTime:  cred.CreatedAt.Format("2006-01-02 15:04:05"),
+		}
+		vos = append(vos, vo)
+	}
+
+	return vos, total, nil
+}
+
+// GetAll 获取所有凭证（用于下拉选择）
+func (uc *CredentialUseCase) GetAll(ctx context.Context) ([]*CredentialVO, error) {
+	credentials, err := uc.repo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var vos []*CredentialVO
+	for _, cred := range credentials {
+		typeText := "密码"
+		if cred.Type == "key" {
+			typeText = "密钥"
+		}
+
+		vo := &CredentialVO{
+			ID:          cred.ID,
+			Name:        cred.Name,
+			Type:        cred.Type,
+			TypeText:    typeText,
+			Username:    cred.Username,
+			Description: cred.Description,
+			CreateTime:  cred.CreatedAt.Format("2006-01-02 15:04:05"),
+		}
+		vos = append(vos, vo)
+	}
+
+	return vos, nil
+}
+
+// CloudAccountUseCase 云平台账号用例
+type CloudAccountUseCase struct {
+	repo CloudAccountRepo
+}
+
+func NewCloudAccountUseCase(repo CloudAccountRepo) *CloudAccountUseCase {
+	return &CloudAccountUseCase{repo: repo}
+}
+
+// Create 创建云平台账号
+func (uc *CloudAccountUseCase) Create(ctx context.Context, req *CloudAccountRequest) (*CloudAccount, error) {
+	account := req.ToModel()
+
+	if err := uc.repo.Create(ctx, account); err != nil {
+		return nil, err
+	}
+
+	return account, nil
+}
+
+// Update 更新云平台账号
+func (uc *CloudAccountUseCase) Update(ctx context.Context, req *CloudAccountRequest) error {
+	account, err := uc.repo.GetByID(ctx, req.ID)
+	if err != nil {
+		return fmt.Errorf("云平台账号不存在")
+	}
+
+	account.Name = req.Name
+	account.Provider = req.Provider
+	account.AccessKey = req.AccessKey
+	account.SecretKey = req.SecretKey
+	account.Region = req.Region
+	account.Description = req.Description
+	account.Status = req.Status
+
+	return uc.repo.Update(ctx, account)
+}
+
+// Delete 删除云平台账号
+func (uc *CloudAccountUseCase) Delete(ctx context.Context, id uint) error {
+	return uc.repo.Delete(ctx, id)
+}
+
+// GetByID 根据ID获取云平台账号
+func (uc *CloudAccountUseCase) GetByID(ctx context.Context, id uint) (*CloudAccount, error) {
+	return uc.repo.GetByID(ctx, id)
+}
+
+// List 分页查询云平台账号列表
+func (uc *CloudAccountUseCase) List(ctx context.Context, page, pageSize int) ([]*CloudAccountVO, int64, error) {
+	accounts, total, err := uc.repo.List(ctx, page, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var vos []*CloudAccountVO
+	for _, acc := range accounts {
+		vo := uc.toVO(acc)
+		vos = append(vos, vo)
+	}
+
+	return vos, total, nil
+}
+
+// GetAll 获取所有启用的云平台账号
+func (uc *CloudAccountUseCase) GetAll(ctx context.Context) ([]*CloudAccountVO, error) {
+	accounts, err := uc.repo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var vos []*CloudAccountVO
+	for _, acc := range accounts {
+		vo := uc.toVO(acc)
+		vos = append(vos, vo)
+	}
+
+	return vos, nil
+}
+
+// toVO 转换为VO
+func (uc *CloudAccountUseCase) toVO(account *CloudAccount) *CloudAccountVO {
+	providerText := "阿里云"
+	switch account.Provider {
+	case "tencent":
+		providerText = "腾讯云"
+	case "aws":
+		providerText = "AWS"
+	case "huawei":
+		providerText = "华为云"
+	}
+
+	return &CloudAccountVO{
+		ID:           account.ID,
+		Name:         account.Name,
+		Provider:     account.Provider,
+		ProviderText: providerText,
+		Region:       account.Region,
+		Description:  account.Description,
+		Status:       account.Status,
+		CreateTime:   account.CreatedAt.Format("2006-01-02 15:04:05"),
+	}
+}
+
+// ImportFromCloud 从云平台导入主机
+func (uc *CloudAccountUseCase) ImportFromCloud(ctx context.Context, req *CloudImportRequest, hostUseCase *HostUseCase) error {
+	account, err := uc.repo.GetByID(ctx, req.AccountID)
+	if err != nil {
+		return fmt.Errorf("云平台账号不存在")
+	}
+
+	// 根据不同的云厂商调用不同的SDK获取实例列表
+	// 这里先实现阿里云的导入
+	var instances []CloudInstance
+
+	switch account.Provider {
+	case "aliyun":
+		instances, err = uc.listAliyunInstances(account, req.Region)
+	case "tencent":
+		instances, err = uc.listTencentInstances(account, req.Region)
+	default:
+		return fmt.Errorf("暂不支持该云平台")
+	}
+
+	if err != nil {
+		return fmt.Errorf("获取云主机列表失败: %w", err)
+	}
+
+	// 批量导入主机
+	for _, instance := range instances {
+		// 如果指定了实例ID列表，只导入指定的实例
+		if len(req.InstanceIDs) > 0 && !utils.Contains(req.InstanceIDs, instance.InstanceID) {
+			continue
+		}
+
+		// 检查是否已存在（通过IP）
+		existHost, _ := hostUseCase.hostRepo.GetByIP(ctx, instance.PublicIP)
+		if existHost != nil {
+			continue
+		}
+
+		// 创建主机请求
+		hostReq := &HostRequest{
+			Name:        instance.Name,
+			GroupID:     req.GroupID,
+			SSHUser:     "root", // 默认使用root
+			IP:          instance.PublicIP,
+			Port:        22,
+			Description: fmt.Sprintf("从%s导入", account.Name),
+		}
+
+		host := hostReq.ToModel()
+		host.Status = -1 // 初始状态未知
+		host.OS = instance.OS
+
+		if err := hostUseCase.hostRepo.Create(ctx, host); err != nil {
+			// 记录错误但继续处理其他主机
+			continue
+		}
+	}
+
+	return nil
+}
+
+// CloudInstance 云主机实例
+type CloudInstance struct {
+	InstanceID string
+	Name       string
+	PublicIP   string
+	PrivateIP  string
+	OS         string
+	Status     string
+}
+
+// listAliyunInstances 获取阿里云实例列表（占位实现）
+func (uc *CloudAccountUseCase) listAliyunInstances(account *CloudAccount, region string) ([]CloudInstance, error) {
+	// TODO: 实现阿里云SDK调用
+	// 这里先返回空列表
+	return []CloudInstance{}, nil
+}
+
+// listTencentInstances 获取腾讯云实例列表（占位实现）
+func (uc *CloudAccountUseCase) listTencentInstances(account *CloudAccount, region string) ([]CloudInstance, error) {
+	// TODO: 实现腾讯云SDK调用
+	// 这里先返回空列表
+	return []CloudInstance{}, nil
+}

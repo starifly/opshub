@@ -19,6 +19,8 @@ type SysUser struct {
 	DepartmentID uint          `gorm:"default:0;comment:部门ID" json:"departmentId"`
 	Department  *SysDepartment `gorm:"foreignKey:DepartmentID;references:ID" json:"department,omitempty"`
 	Roles       []SysRole      `gorm:"many2many:sys_user_role;joinForeignKey:UserID;joinReferences:RoleID" json:"roles"`
+	Positions   []SysPosition `gorm:"many2many:sys_user_position;joinForeignKey:UserID;joinReferences:PositionID" json:"positions,omitempty"`
+	Bio         string         `gorm:"type:text;comment:个人简介" json:"bio"`
 	LastLoginAt *time.Time     `gorm:"comment:最后登录时间" json:"lastLoginAt,omitempty"`
 }
 
@@ -45,6 +47,7 @@ type SysDepartment struct {
 	DeptType    int               `gorm:"column:dept_type;type:tinyint;default:3;comment:部门类型 1:公司 2:中心 3:部门" json:"deptType"`
 	Sort        int               `gorm:"type:int;default:0;comment:排序" json:"sort"`
 	Status      int               `gorm:"type:tinyint;default:1;comment:状态 1:启用 0:禁用" json:"status"`
+	UserCount   int               `gorm:"-" json:"userCount"` // 用户数量（仅用于API响应）
 }
 
 // DepartmentRequest 部门请求（前端使用）
@@ -80,6 +83,7 @@ type DepartmentInfoVO struct {
 	Code       string             `json:"code"`
 	DeptStatus int                `json:"deptStatus"`
 	CreateTime string             `json:"createTime"`
+	UserCount  int                `json:"userCount"`
 	Children   []*DepartmentInfoVO `json:"children,omitempty"`
 }
 

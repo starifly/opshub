@@ -3,6 +3,8 @@ import request from '@/utils/request'
 export interface LoginParams {
   username: string
   password: string
+  captchaId?: string
+  captchaCode?: string
 }
 
 export interface RegisterParams {

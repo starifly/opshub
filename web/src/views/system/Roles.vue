@@ -74,7 +74,7 @@
         class="modern-table"
         :header-cell-style="{ background: '#fafbfc', color: '#606266', fontWeight: '600' }"
       >
-        <el-table-column prop="id" label="ID" width="80" align="center" />
+        <el-table-column prop="ID" label="ID" width="80" align="center" />
 
         <el-table-column label="角色名称" prop="name" min-width="150">
           <template #default="{ row }">
@@ -144,8 +144,8 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="600px"
-      class="role-edit-dialog"
+      width="50%"
+      class="role-edit-dialog responsive-dialog"
       :close-on-click-modal="false"
       @close="handleDialogClose"
     >
@@ -675,5 +675,19 @@ onMounted(() => {
 
 :deep(.el-select .el-input__wrapper) {
   border-radius: 8px;
+}
+
+/* 响应式对话框 */
+:deep(.responsive-dialog) {
+  max-width: 900px;
+  min-width: 500px;
+}
+
+@media (max-width: 768px) {
+  :deep(.responsive-dialog .el-dialog) {
+    width: 95% !important;
+    max-width: none;
+    min-width: auto;
+  }
 }
 </style>

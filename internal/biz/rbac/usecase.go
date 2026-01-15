@@ -42,12 +42,16 @@ func (uc *UserUseCase) GetByUsername(ctx context.Context, username string) (*Sys
 	return uc.userRepo.GetByUsername(ctx, username)
 }
 
-func (uc *UserUseCase) List(ctx context.Context, page, pageSize int, keyword string) ([]*SysUser, int64, error) {
-	return uc.userRepo.List(ctx, page, pageSize, keyword)
+func (uc *UserUseCase) List(ctx context.Context, page, pageSize int, keyword string, departmentID uint) ([]*SysUser, int64, error) {
+	return uc.userRepo.List(ctx, page, pageSize, keyword, departmentID)
 }
 
 func (uc *UserUseCase) AssignRoles(ctx context.Context, userID uint, roleIDs []uint) error {
 	return uc.userRepo.AssignRoles(ctx, userID, roleIDs)
+}
+
+func (uc *UserUseCase) AssignPositions(ctx context.Context, userID uint, positionIDs []uint) error {
+	return uc.userRepo.AssignPositions(ctx, userID, positionIDs)
 }
 
 func (uc *UserUseCase) ValidatePassword(ctx context.Context, username, password string) (*SysUser, error) {
@@ -212,6 +216,7 @@ func (uc *DepartmentUseCase) ToInfoVO(dept *SysDepartment) *DepartmentInfoVO {
 		Code:       dept.Code,
 		DeptStatus: dept.Status,
 		CreateTime: dept.CreatedAt.Format("2006-01-02 15:04:05"),
+		UserCount:  dept.UserCount,
 	}
 	if len(dept.Children) > 0 {
 		for _, child := range dept.Children {

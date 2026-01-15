@@ -60,6 +60,24 @@ const router = createRouter({
           meta: { title: '系统配置' }
         },
         {
+          path: 'asset/hosts',
+          name: 'AssetHosts',
+          component: () => import('@/views/asset/Hosts.vue'),
+          meta: { title: '主机管理' }
+        },
+        {
+          path: 'asset/groups',
+          name: 'AssetGroups',
+          component: () => import('@/views/asset/Groups.vue'),
+          meta: { title: '业务分组' }
+        },
+        {
+          path: 'asset/data',
+          name: 'AssetData',
+          component: () => import('@/views/asset/Data.vue'),
+          meta: { title: '数据管理' }
+        },
+        {
           path: 'profile',
           name: 'Profile',
           component: () => import('@/views/Profile.vue'),
