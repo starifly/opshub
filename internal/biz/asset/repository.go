@@ -17,7 +17,7 @@ type HostRepo interface {
 	Update(ctx context.Context, host *Host) error
 	Delete(ctx context.Context, id uint) error
 	GetByID(ctx context.Context, id uint) (*Host, error)
-	List(ctx context.Context, page, pageSize int, keyword string) ([]*Host, int64, error)
+	List(ctx context.Context, page, pageSize int, keyword string, groupID *uint) ([]*Host, int64, error)
 	GetByGroupID(ctx context.Context, groupID uint) ([]*Host, error)
 	GetByIP(ctx context.Context, ip string) (*Host, error)
 }

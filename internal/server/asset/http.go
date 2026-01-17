@@ -11,15 +11,18 @@ import (
 type HTTPServer struct {
 	assetGroupService *assetService.AssetGroupService
 	hostService       *assetService.HostService
+	terminalManager   *TerminalManager
 }
 
 func NewHTTPServer(
 	assetGroupService *assetService.AssetGroupService,
 	hostService *assetService.HostService,
+	terminalManager *TerminalManager,
 ) *HTTPServer {
 	return &HTTPServer{
 		assetGroupService: assetGroupService,
 		hostService:       hostService,
+		terminalManager:   terminalManager,
 	}
 }
 
@@ -70,12 +73,20 @@ func (s *HTTPServer) RegisterRoutes(r *gin.RouterGroup) {
 		cloudAccounts.DELETE("/:id", s.hostService.DeleteCloudAccount)
 		cloudAccounts.POST("/import", s.hostService.ImportFromCloud)
 	}
+
+	// SSH终端
+	terminal := r.Group("/asset/terminal")
+	{
+		terminal.GET("/:id", s.HandleSSHConnection)
+		terminal.POST("/:id/resize", s.ResizeTerminal)
+	}
 }
 
 // NewAssetServices 创建asset相关的服务
 func NewAssetServices(db *gorm.DB) (
 	*assetService.AssetGroupService,
 	*assetService.HostService,
+	*TerminalManager,
 ) {
 	// 初始化Repository
 	assetGroupRepo := assetdata.NewAssetGroupRepo(db)
@@ -93,5 +104,8 @@ func NewAssetServices(db *gorm.DB) (
 	assetGroupService := assetService.NewAssetGroupService(assetGroupUseCase)
 	hostService := assetService.NewHostService(hostUseCase, credentialUseCase, cloudAccountUseCase)
 
-	return assetGroupService, hostService
+	// 初始化TerminalManager
+	terminalManager := NewTerminalManager(hostUseCase)
+
+	return assetGroupService, hostService, terminalManager
 }

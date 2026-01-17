@@ -1,6 +1,6 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="260px">
+    <el-aside width="260px" v-if="!hideSidebar">
       <div class="logo">
         <h3>OpsHub</h3>
       </div>
@@ -134,6 +134,11 @@ const activeMenu = computed(() => {
     return route.meta.activeMenu as string
   }
   return route.path
+})
+
+// 是否隐藏侧边栏
+const hideSidebar = computed(() => {
+  return route.meta?.hideSidebar === true || false
 })
 
 // 头像URL - 添加时间戳破坏缓存

@@ -36,7 +36,7 @@ class KubernetesPlugin implements Plugin {
 
     return [
       {
-        name: 'Kubernetes管理',
+        name: '容器管理',
         path: parentPath,
         icon: 'Platform',
         sort: 100,

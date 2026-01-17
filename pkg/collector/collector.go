@@ -12,16 +12,14 @@ import (
 
 // SystemInfo 系统信息
 type SystemInfo struct {
-	OS           string    `json:"os"`            // 操作系统
-	Kernel       string    `json:"kernel"`        // 内核版本
-	Arch         string    `json:"arch"`          // 架构
-	CPU          CPUInfo   `json:"cpu"`           // CPU信息
-	Memory       MemoryInfo `json:"memory"`       // 内存信息
-	Disk         []DiskInfo `json:"disk"`         // 磁盘信息
-	ProcessCount int       `json:"processCount"`  // 进程数
-	PortCount    int       `json:"portCount"`     // 端口数
-	Uptime       string    `json:"uptime"`        // 运行时间
-	Hostname     string    `json:"hostname"`      // 主机名
+	OS       string      `json:"os"`       // 操作系统
+	Kernel   string      `json:"kernel"`   // 内核版本
+	Arch     string      `json:"arch"`     // 架构
+	CPU      CPUInfo     `json:"cpu"`      // CPU信息
+	Memory   MemoryInfo  `json:"memory"`   // 内存信息
+	Disk     []DiskInfo  `json:"disk"`     // 磁盘信息
+	Uptime   string      `json:"uptime"`   // 运行时间
+	Hostname string      `json:"hostname"` // 主机名
 }
 
 // CPUInfo CPU信息
@@ -66,28 +64,6 @@ type DiskInfo struct {
 	Usage      float64 `json:"usage"`      // 使用率百分比
 }
 
-// ProcessInfo 进程信息
-type ProcessInfo struct {
-	PID        int     `json:"pid"`        // 进程ID
-	Name       string  `json:"name"`       // 进程名
-	CPU        float64 `json:"cpu"`        // CPU使用率
-	Memory     float64 `json:"memory"`     // 内存使用率
-	Status     string  `json:"status"`     // 状态
-	User       string  `json:"user"`       // 用户
-	Command    string  `json:"command"`    // 命令
-	StartTime  string  `json:"startTime"`  // 启动时间
-}
-
-// PortInfo 端口信息
-type PortInfo struct {
-	Port     int    `json:"port"`     // 端口号
-	Protocol string `json:"protocol"` // 协议 tcp/udp
-	State    string `json:"state"`    // 状态
-	PID      int    `json:"pid"`      // 进程ID
-	Process  string `json:"process"`  // 进程名
-	Address  string `json:"address"`  // 监听地址
-}
-
 // Collector 采集器
 type Collector struct {
 	sshClient *sshclient.Client
@@ -107,8 +83,8 @@ func (c *Collector) CollectAll() (*SystemInfo, error) {
 	info := &SystemInfo{}
 
 	// 并发采集各个信息
-	errChan := make(chan error, 7)
-	var errCPU, errMem, errDisk, errProc, errPort, errSys, errUptime error
+	errChan := make(chan error, 5)
+	var errCPU, errMem, errDisk, errSys, errUptime error
 
 	go func() {
 		info.CPU, errCPU = c.CollectCPU()
@@ -126,16 +102,6 @@ func (c *Collector) CollectAll() (*SystemInfo, error) {
 	}()
 
 	go func() {
-		info.ProcessCount, errProc = c.CollectProcessCount()
-		errChan <- errProc
-	}()
-
-	go func() {
-		info.PortCount, errPort = c.CollectPortCount()
-		errChan <- errPort
-	}()
-
-	go func() {
 		info.OS, info.Kernel, info.Arch, info.Hostname, errSys = c.CollectSystemInfo()
 		errChan <- errSys
 	}()
@@ -146,7 +112,7 @@ func (c *Collector) CollectAll() (*SystemInfo, error) {
 	}()
 
 	// 等待所有采集完成
-	for i := 0; i < 7; i++ {
+	for i := 0; i < 5; i++ {
 		<-errChan
 	}
 
@@ -289,7 +255,8 @@ func (c *Collector) CollectMemory() (MemoryInfo, error) {
 
 // CollectDisk 采集磁盘信息
 func (c *Collector) CollectDisk() ([]DiskInfo, error) {
-	output, err := c.sshClient.Execute("df -B1 -x tmpfs -x devtmpfs -x squashfs")
+	// 只统计根目录 / 的磁盘信息
+	output, err := c.sshClient.Execute("df -B1 /")
 	if err != nil {
 		return nil, fmt.Errorf("获取磁盘信息失败: %w", err)
 	}
@@ -306,12 +273,20 @@ func (c *Collector) CollectDisk() ([]DiskInfo, error) {
 			continue
 		}
 
+		device := fields[0]
+		mountPoint := fields[5]
+
+		// 只处理根目录
+		if mountPoint != "/" {
+			continue
+		}
+
 		disk := DiskInfo{
-			Device:     fields[0],
+			Device:     device,
 			Total:      0,
 			Used:       0,
 			Free:       0,
-			MountPoint: fields[5],
+			MountPoint: mountPoint,
 		}
 
 		disk.Total, _ = strconv.ParseUint(fields[1], 10, 64)
@@ -324,7 +299,7 @@ func (c *Collector) CollectDisk() ([]DiskInfo, error) {
 
 		// 获取文件系统类型
 		fstype := "unknown"
-		if strings.Contains(disk.Device, "/dev/") {
+		if strings.Contains(disk.Device, "/dev/") || strings.Contains(disk.Device, "mapper") {
 			fsOutput, _ := c.sshClient.Execute(fmt.Sprintf("blkid -o value -s TYPE %s 2>/dev/null", disk.Device))
 			fstype = strings.TrimSpace(fsOutput)
 			if fstype == "" {
@@ -375,96 +350,6 @@ func (c *Collector) CollectUptime() (string, error) {
 	}
 
 	return strings.TrimSpace(output), nil
-}
-
-// CollectProcesses 采集进程列表
-func (c *Collector) CollectProcesses(limit int) ([]ProcessInfo, error) {
-	output, err := c.sshClient.Execute(fmt.Sprintf("ps aux --sort=-%%cpu | head -%d", limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("获取进程列表失败: %w", err)
-	}
-
-	var processes []ProcessInfo
-	lines := strings.Split(output, "\n")
-	for i, line := range lines {
-		if i == 0 || strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 11 {
-			continue
-		}
-
-		pid, _ := strconv.Atoi(fields[1])
-		cpu, _ := strconv.ParseFloat(fields[2], 64)
-		mem, _ := strconv.ParseFloat(fields[3], 64)
-
-		process := ProcessInfo{
-			User:    fields[0],
-			PID:     pid,
-			CPU:     cpu,
-			Memory:  mem,
-			Status:  fields[7],
-			Command: strings.Join(fields[10:], " "),
-		}
-
-		processes = append(processes, process)
-	}
-
-	return processes, nil
-}
-
-// CollectPorts 采集端口列表
-func (c *Collector) CollectPorts() ([]PortInfo, error) {
-	output, err := c.sshClient.Execute("ss -tlnpa 2>/dev/null || netstat -tlnp 2>/dev/null")
-	if err != nil {
-		return nil, fmt.Errorf("获取端口列表失败: %w", err)
-	}
-
-	var ports []PortInfo
-	lines := strings.Split(output, "\n")
-	for i, line := range lines {
-		if i == 0 || strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
-			continue
-		}
-
-		port := PortInfo{
-			Protocol: fields[0],
-		}
-
-		// 解析地址和端口
-		addrParts := strings.Split(fields[3], ":")
-		if len(addrParts) >= 2 {
-			port.Port, _ = strconv.Atoi(addrParts[len(addrParts)-1])
-			port.Address = strings.Join(addrParts[:len(addrParts)-1], ":")
-		}
-
-		// 解析状态
-		port.State = fields[1]
-
-		// 解析进程信息
-		if len(fields) >= 7 && strings.Contains(fields[6], "pid=") {
-			pidInfo := strings.Split(fields[6], ",")
-			for _, info := range pidInfo {
-				if strings.HasPrefix(info, "pid=") {
-					port.PID, _ = strconv.Atoi(strings.TrimPrefix(info, "pid="))
-				}
-				if strings.HasPrefix(info, "name=") {
-					port.Process = strings.TrimPrefix(info, "name=")
-				}
-			}
-		}
-
-		ports = append(ports, port)
-	}
-
-	return ports, nil
 }
 
 // ToJSON 转换为JSON

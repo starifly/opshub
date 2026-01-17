@@ -75,7 +75,7 @@ func (uc *AssetGroupUseCase) ToInfoVO(group *AssetGroup) *AssetGroupInfoVO {
 		Description: group.Description,
 		Sort:        group.Sort,
 		Status:      group.Status,
-		HostCount:   0, // TODO: 从主机表统计
+		HostCount:   group.HostCount,
 		CreateTime:  group.CreatedAt.Format("2006-01-02 15:04:05"),
 	}
 	if len(group.Children) > 0 {

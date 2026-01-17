@@ -105,7 +105,17 @@ func (s *HostService) ListHosts(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "10"))
 	keyword := c.Query("keyword")
 
-	hosts, total, err := s.hostUseCase.List(c.Request.Context(), page, pageSize, keyword)
+	// 支持分组ID筛选
+	var groupID *uint
+	if groupIDStr := c.Query("groupId"); groupIDStr != "" {
+		id, err := strconv.ParseUint(groupIDStr, 10, 32)
+		if err == nil {
+			gid := uint(id)
+			groupID = &gid
+		}
+	}
+
+	hosts, total, err := s.hostUseCase.List(c.Request.Context(), page, pageSize, keyword, groupID)
 	if err != nil {
 		response.ErrorCode(c, http.StatusInternalServerError, "查询失败: "+err.Error())
 		return
@@ -186,7 +196,8 @@ func (s *HostService) GetCredential(c *gin.Context) {
 		return
 	}
 
-	credential, err := s.credentialUseCase.GetByID(c.Request.Context(), uint(id))
+	// 获取解密后的凭证详情（用于编辑时回显私钥）
+	credential, err := s.credentialUseCase.GetByIDDecrypted(c.Request.Context(), uint(id))
 	if err != nil {
 		response.ErrorCode(c, http.StatusNotFound, "凭证不存在")
 		return

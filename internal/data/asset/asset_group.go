@@ -50,6 +50,25 @@ func (r *assetGroupRepo) GetTree(ctx context.Context) ([]*asset.AssetGroup, erro
 	if err != nil {
 		return nil, err
 	}
+
+	// 统计每个分组的主机数量
+	hostCounts := make(map[uint]int)
+	var results []struct {
+		GroupID uint
+		Count   int64
+	}
+	err = r.db.WithContext(ctx).Table("hosts").Select("group_id, COUNT(*) as count").Where("group_id > 0").Group("group_id").Scan(&results).Error
+	if err == nil {
+		for _, result := range results {
+			hostCounts[result.GroupID] = int(result.Count)
+		}
+	}
+
+	// 为每个分组设置主机数量
+	for _, group := range groups {
+		group.HostCount = hostCounts[group.ID]
+	}
+
 	return r.buildTree(groups, 0), nil
 }
 

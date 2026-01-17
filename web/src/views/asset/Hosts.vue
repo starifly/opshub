@@ -12,6 +12,10 @@
         </div>
       </div>
       <div class="header-actions">
+        <el-button @click="handleOpenTerminal" class="terminal-button">
+          <el-icon style="margin-right: 6px;"><Monitor /></el-icon>
+          终端
+        </el-button>
         <el-dropdown @command="handleImportCommand" class="import-dropdown">
           <el-button class="black-button">
             <el-icon style="margin-right: 6px;"><Plus /></el-icon>
@@ -40,8 +44,8 @@
 
     <!-- 主内容区域：左侧分组树 + 右侧主机列表 -->
     <div class="main-content">
-      <!-- 左侧分组树 -->
-      <div class="left-panel">
+      <!-- 左侧分组树 - 终端视图时隐藏 -->
+      <div class="left-panel" v-show="activeView === 'hosts'">
         <div class="panel-header">
           <div class="panel-title">
             <el-icon class="panel-icon"><Collection /></el-icon>
@@ -120,10 +124,12 @@
         </div>
       </div>
 
-      <!-- 右侧主机列表 -->
+      <!-- 右侧主机列表/终端 -->
       <div class="right-panel">
-        <!-- 搜索和筛选栏 -->
-        <div class="filter-bar">
+        <!-- 主机列表视图 -->
+        <div v-show="activeView === 'hosts'" class="view-container">
+          <!-- 搜索和筛选栏 -->
+          <div class="filter-bar">
           <div class="filter-inputs">
             <el-input
               v-model="searchForm.keyword"
@@ -179,6 +185,7 @@
             v-loading="hostLoading"
             class="modern-table"
             :header-cell-style="{ background: '#fafbfc', color: '#606266', fontWeight: '600' }"
+            @row-dblclick="handleHostDblClick"
           >
             <el-table-column label="主机名" prop="name" min-width="150" fixed="left">
               <template #default="{ row }">
@@ -194,17 +201,17 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="分组" prop="groupName" min-width="100">
+            <el-table-column label="分组" prop="groupName" min-width="120" show-overflow-tooltip>
               <template #default="{ row }">
-                <el-tag v-if="row.groupName" size="small" type="info">{{ row.groupName }}</el-tag>
+                <span v-if="row.groupName">{{ row.groupName }}</span>
                 <span v-else class="text-muted">-</span>
               </template>
             </el-table-column>
 
-            <el-table-column label="凭证" min-width="120">
+            <el-table-column label="凭证" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">
                 <div v-if="row.credential" class="credential-cell">
-                  <div class="credential-name">{{ row.credential.name }}</div>
+                  <span class="credential-name">{{ row.credential.name }}</span>
                   <el-tag size="small" :type="row.credential.type === 'password' ? 'warning' : 'success'">
                     {{ row.credential.typeText }}
                   </el-tag>
@@ -272,21 +279,6 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="进程/端口" width="100" align="center">
-              <template #default="{ row }">
-                <div class="process-port-cell">
-                  <div class="item">
-                    <el-icon><Connection /></el-icon>
-                    <span>{{ row.processCount || 0 }}</span>
-                  </div>
-                  <div class="item">
-                    <el-icon><Position /></el-icon>
-                    <span>{{ row.portCount || 0 }}</span>
-                  </div>
-                </div>
-              </template>
-            </el-table-column>
-
             <el-table-column label="标签" prop="tags" min-width="120">
               <template #default="{ row }">
                 <div v-if="row.tags && row.tags.length > 0" class="tags-cell">
@@ -306,21 +298,19 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="配置" min-width="150">
+            <el-table-column label="配置" min-width="180" show-overflow-tooltip>
               <template #default="{ row }">
-                <div class="config-cell">
-                  <div v-if="row.os || row.kernel || row.arch" class="config-info">
-                    <div v-if="row.os" class="config-item">
-                      <el-icon><Platform /></el-icon>
-                      <span class="config-text">{{ row.os }}</span>
-                    </div>
-                    <div v-if="row.kernel" class="config-item">
-                      <el-icon><Operation /></el-icon>
-                      <span class="config-text">{{ row.kernel }}</span>
-                    </div>
+                <div v-if="row.os || row.kernel || row.arch" class="config-cell">
+                  <div v-if="row.os" class="config-item">
+                    <el-icon><Platform /></el-icon>
+                    <span class="config-text">{{ row.os }}</span>
                   </div>
-                  <span v-else class="text-muted">-</span>
+                  <div v-if="row.kernel" class="config-item">
+                    <el-icon><Operation /></el-icon>
+                    <span class="config-text">{{ row.kernel }}</span>
+                  </div>
                 </div>
+                <span v-else class="text-muted">-</span>
               </template>
             </el-table-column>
 
@@ -358,6 +348,117 @@
               @size-change="loadHostList"
               @current-change="loadHostList"
             />
+          </div>
+        </div>
+        </div>
+
+        <!-- 终端视图 -->
+        <div v-show="activeView === 'terminal'" class="view-container terminal-view">
+          <div class="terminal-view-header">
+            <div class="terminal-view-title">
+              <el-icon><Monitor /></el-icon>
+              <span>Web终端</span>
+              <span v-if="activeTerminalHost" class="terminal-current-group">
+                / {{ activeTerminalHost.name }}
+              </span>
+            </div>
+            <el-button size="small" @click="switchToHostsView">
+              <el-icon style="margin-right: 4px;"><ArrowLeft /></el-icon>
+              返回主机列表
+            </el-button>
+          </div>
+          <div class="terminal-content">
+            <!-- 资产分组树（左） -->
+            <div class="terminal-sidebar">
+              <div class="panel-header">
+                <div class="panel-title">
+                  <el-icon class="panel-icon"><Collection /></el-icon>
+                  <span>资产分组</span>
+                </div>
+                <div class="panel-actions">
+                  <el-tooltip :content="isExpandAll ? '折叠全部' : '展开全部'" placement="top">
+                    <el-button circle size="small" @click="toggleExpandAll">
+                      <el-icon><Sort /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+              </div>
+              <div class="panel-body">
+                <el-input
+                  v-model="groupSearchKeyword"
+                  placeholder="搜索分组..."
+                  clearable
+                  size="small"
+                  class="group-search"
+                  @input="filterGroupTree"
+                >
+                  <template #prefix>
+                    <el-icon><Search /></el-icon>
+                  </template>
+                </el-input>
+                <div class="tree-container" v-loading="groupLoading">
+                  <el-tree
+                    ref="groupTreeRef"
+                    :data="terminalGroupTree"
+                    :props="treeProps"
+                    :default-expand-all="false"
+                    :expand-on-click-node="false"
+                    :highlight-current="true"
+                    node-key="id"
+                    class="group-tree"
+                  >
+                    <template #default="{ node, data }">
+                      <div class="tree-node" @dblclick="handleHostDblClick(data)" :style="{ cursor: data.type === 'host' ? 'pointer' : 'default' }">
+                        <span class="node-icon">
+                          <el-icon v-if="data.type === 'group' || !data.parentId || data.parentId === 0" color="#67c23a">
+                            <Collection />
+                          </el-icon>
+                          <el-icon v-else-if="data.type === 'host'" :color="getStatusColor(data.status)">
+                            <Monitor />
+                          </el-icon>
+                          <el-icon v-else color="#409eff">
+                            <Folder />
+                          </el-icon>
+                        </span>
+                        <span class="node-label">{{ node.label }}</span>
+                        <span v-if="data.type === 'group' || !data.type" class="node-count">({{ data.hostCount || 0 }})</span>
+                        <span v-if="data.type === 'host'" class="node-ip">{{ data.ip }}</span>
+                      </div>
+                    </template>
+                  </el-tree>
+                  <el-empty v-if="!terminalGroupTree || terminalGroupTree.length === 0" description="暂无数据" :image-size="60" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 终端区域（右） -->
+            <div class="terminal-main">
+              <div v-if="activeTerminalHost" class="terminal-header">
+                <div class="terminal-info">
+                  <el-icon class="terminal-icon"><Monitor /></el-icon>
+                  <div class="terminal-details">
+                    <div class="terminal-title">{{ activeTerminalHost.name }}</div>
+                    <div class="terminal-meta">
+                      <span class="terminal-ip">{{ activeTerminalHost.ip }}:{{ activeTerminalHost.port }}</span>
+                      <span class="terminal-user">{{ activeTerminalHost.sshUser }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="terminal-actions">
+                  <el-button size="small" @click="closeTerminal" :icon="Close">关闭</el-button>
+                </div>
+              </div>
+              <div v-else class="terminal-placeholder">
+                <el-icon class="placeholder-icon"><Monitor /></el-icon>
+                <div class="placeholder-text">请双击左侧主机连接终端</div>
+                <div class="placeholder-hint">展开分组查看主机，双击主机即可连接</div>
+              </div>
+              <div v-if="activeTerminalHost" class="terminal-body">
+                <div class="terminal-wrapper">
+                  <div ref="terminalRef" class="xterm-container"></div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -845,11 +946,17 @@
         </div>
       </template>
     </el-dialog>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch, nextTick, onBeforeUnmount } from 'vue'
+import { Terminal } from 'xterm'
+import { FitAddon } from 'xterm-addon-fit'
+import { WebLinksAddon } from 'xterm-addon-web-links'
+import 'xterm/css/xterm.css'
+import 'xterm/lib/xterm.js'
 import { ElMessage, ElMessageBox, FormInstance, FormRules, UploadFile, UploadProps } from 'element-plus'
 import {
   Plus,
@@ -866,14 +973,13 @@ import {
   Close,
   MoreFilled,
   ArrowDown,
+  ArrowLeft,
   DocumentAdd,
   Upload,
   Cloudy,
   Download,
   Document,
   UploadFilled,
-  Connection,
-  Position,
   Platform,
   Operation
 } from '@element-plus/icons-vue'
@@ -908,6 +1014,18 @@ const loadingCloudHosts = ref(false)
 const credentialSubmitting = ref(false)
 const cloudAccountSubmitting = ref(false)
 const groupSubmitting = ref(false)
+
+// 视图状态
+const activeView = ref('hosts') // 'hosts' | 'terminal'
+const activeTerminalHost = ref<any>(null)
+const terminalHostList = ref<any[]>([])
+const terminalSearchKeyword = ref('')
+
+// 终端相关
+const terminalRef = ref<HTMLElement | null>(null)
+const terminal = ref<Terminal | null>(null)
+const fitAddon = ref<FitAddon | null>(null)
+const ws = ref<WebSocket | null>(null)
 
 // 对话框状态
 const directImportVisible = ref(false)
@@ -1125,8 +1243,15 @@ const getAllNodeKeys = (nodes: any[]): any[] => {
 // 点击分组节点
 const handleGroupClick = (data: any) => {
   selectedGroup.value = data
-  hostPagination.page = 1
-  loadHostList()
+
+  if (activeView.value === 'terminal') {
+    // 终端视图：加载该分组的主机到终端列表
+    loadTerminalHostList(data.id)
+  } else {
+    // 主机列表视图：加载该分组的主机到表格
+    hostPagination.page = 1
+    loadHostList()
+  }
 }
 
 // 清除分组选择
@@ -1196,6 +1321,10 @@ const loadHostList = async () => {
     if (searchForm.status !== undefined) {
       params.status = searchForm.status
     }
+    // 添加分组ID筛选
+    if (selectedGroup.value && selectedGroup.value.id) {
+      params.groupId = selectedGroup.value.id
+    }
 
     const res = await getHostList(params)
     hostList.value = res.list || []
@@ -1226,6 +1355,220 @@ const loadCloudAccountList = async () => {
   } catch (error) {
     console.error('获取云平台账号列表失败:', error)
   }
+}
+
+// 终端相关方法
+const openTerminalTab = () => {
+  const url = window.location.origin + '/terminal'
+  window.open(url, '_blank')
+}
+
+const handleHostDblClick = async (data: any) => {
+  // 如果是主机节点，直接连接终端
+  if (data.type === 'host' || data.ip) {
+    activeTerminalHost.value = data
+  } else if (activeView.value !== 'terminal') {
+    // 如果是分组节点且不在终端视图，切换到终端视图
+    await openTerminalView()
+  }
+}
+
+// 终端视图相关方法
+const loadTerminalHostList = async (groupId?: number) => {
+  try {
+    const params: any = {
+      page: 1,
+      pageSize: 10000
+    }
+    if (groupId) {
+      params.groupId = groupId
+    }
+    const res = await getHostList(params)
+    console.log('终端主机列表数据:', res)
+    terminalHostList.value = res.list || []
+    console.log('terminalHostList:', terminalHostList.value)
+  } catch (error) {
+    console.error('获取主机列表失败:', error)
+    terminalHostList.value = []
+  }
+}
+
+// 过滤终端主机列表
+const filteredTerminalHosts = computed(() => {
+  if (!terminalSearchKeyword.value) {
+    return terminalHostList.value
+  }
+  const keyword = terminalSearchKeyword.value.toLowerCase()
+  return terminalHostList.value.filter((host: any) => {
+    return host.name?.toLowerCase().includes(keyword) ||
+           host.ip?.includes(keyword) ||
+           host.groupName?.toLowerCase().includes(keyword)
+  })
+})
+
+// 构建终端视图的分组+主机树
+const terminalGroupTree = computed(() => {
+  if (!groupTree.value || groupTree.value.length === 0) {
+    return []
+  }
+
+  // 深拷贝分组树
+  const copyTree = (groups: any[]): any[] => {
+    return groups.map((group: any) => ({
+      ...group,
+      type: 'group',
+      label: group.name,
+      children: group.children ? copyTree(group.children) : []
+    }))
+  }
+
+  const tree = copyTree(groupTree.value)
+
+  // 将主机添加到对应的分组
+  const addHostsToGroups = (groups: any[], hosts: any[]) => {
+    groups.forEach((group: any) => {
+      // 查找属于该分组的主机
+      const groupHosts = hosts.filter((h: any) => h.groupId === group.id)
+      if (groupHosts.length > 0) {
+        // 将主机转换为树节点格式
+        const hostNodes = groupHosts.map((host: any) => ({
+          ...host,
+          type: 'host',
+          label: host.name
+        }))
+        // 将主机添加到分组的children中
+        group.children = [...(group.children || []), ...hostNodes]
+      }
+
+      // 递归处理子分组
+      if (group.children && group.children.length > 0) {
+        addHostsToGroups(group.children, hosts)
+      }
+    })
+  }
+
+  addHostsToGroups(tree, terminalHostList.value)
+
+  return tree
+})
+
+// 初始化终端
+const initTerminal = async () => {
+  await nextTick()
+
+  if (!terminalRef.value) return
+
+  // 清理旧的终端
+  if (terminal.value) {
+    terminal.value.dispose()
+  }
+
+  // 创建新终端
+  terminal.value = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    theme: {
+      background: '#1e1e1e',
+      foreground: '#cccccc',
+      cursor: '#cccccc',
+      black: '#000000',
+      red: '#cd3131',
+      green: '#0dbc79',
+      yellow: '#e5e510',
+      blue: '#2472c8',
+      magenta: '#bc3fbc',
+      cyan: '#56b6c2',
+      white: '#ffffff',
+      brightBlack: '#666666',
+      brightRed: '#f14c4c',
+      brightGreen: '#23d18b',
+      brightYellow: '#f5f543',
+      brightBlue: '#3b8eea',
+      brightMagenta: '#d3b9d8',
+      brightCyan: '#61bfff',
+      brightWhite: '#ffffff',
+    }
+  })
+
+  // 加载插件
+  fitAddon.value = new FitAddon()
+  terminal.value.loadAddon(fitAddon.value)
+  terminal.value.loadAddon(new WebLinksAddon())
+
+  // 打开终端
+  terminal.value.open(terminalRef.value)
+
+  // 欢迎信息
+  terminal.value.writeln('\x1b[1;32m欢迎使用 SSH Web 终端\x1b[0m')
+  terminal.value.writeln('正在连接...')
+}
+
+// 连接SSH
+const connectSSH = (host: any) => {
+  const token = localStorage.getItem('token') || ''
+  const wsUrl = `ws://localhost:9876/api/v1/asset/terminal/${host.id}?token=${token}`
+
+  ws.value = new WebSocket(wsUrl)
+
+  ws.value.onopen = () => {
+    if (terminal.value) {
+      terminal.value.writeln('\x1b[1;32m连接成功！\x1b[0m')
+      terminal.value.writeln(`已连接到: ${host.name} (${host.ip}:${host.port})`)
+      terminal.value.writeln('')
+    }
+  }
+
+  ws.value.onmessage = (event) => {
+    if (terminal.value) {
+      terminal.value.write(event.data)
+    }
+  }
+
+  ws.value.onerror = (error) => {
+    console.error('WebSocket error:', error)
+    if (terminal.value) {
+      terminal.value.writeln('\x1b[1;31m连接错误\x1b[0m')
+    }
+  }
+
+  ws.value.onclose = () => {
+    if (terminal.value) {
+      terminal.value.writeln('\r\n\x1b[1;33m连接已关闭\x1b[0m')
+    }
+  }
+}
+
+const getTerminalUrl = (host: any): string => {
+  const token = localStorage.getItem('token') || ''
+  return `/api/v1/asset/terminal/${host.id}?token=${token}`
+}
+
+const closeTerminal = () => {
+  // 关闭WebSocket
+  if (ws.value) {
+    ws.value.close()
+    ws.value = null
+  }
+
+  // 清理终端
+  if (terminal.value) {
+    terminal.value.dispose()
+    terminal.value = null
+  }
+
+  activeTerminalHost.value = null
+}
+
+const switchToHostsView = async () => {
+  activeView.value = 'hosts'
+  activeTerminalHost.value = null
+}
+
+const handleOpenTerminal = () => {
+  // 打开新标签页到终端页面
+  const url = window.location.origin + '/terminal'
+  window.open(url, '_blank')
 }
 
 // 搜索
@@ -1283,19 +1626,37 @@ const handleDirectImportSubmit = async () => {
     if (!valid) return
     hostSubmitting.value = true
     try {
+      let hostId = 0
       // 判断是创建还是更新
       if (hostForm.id && hostForm.id > 0) {
         // 更新主机
         await updateHost(hostForm.id, hostForm)
+        hostId = hostForm.id
         ElMessage.success('主机更新成功')
       } else {
         // 创建主机
-        await createHost(hostForm)
+        const result = await createHost(hostForm)
+        hostId = result.id
         ElMessage.success('主机导入成功')
       }
+
       directImportVisible.value = false
       loadHostList()
       loadGroupTree()
+
+      // 如果配置了凭证，自动采集主机信息
+      if (hostForm.credentialId && hostId > 0) {
+        setTimeout(async () => {
+          try {
+            await collectHostInfo(hostId)
+            ElMessage.success('主机信息采集成功')
+            loadHostList()
+          } catch (error: any) {
+            console.error('自动采集失败:', error)
+            // 采集失败不阻塞主流程，只记录错误
+          }
+        }, 500)
+      }
     } catch (error: any) {
       ElMessage.error(error.message || '操作失败')
     } finally {
@@ -1654,6 +2015,22 @@ const handleCollectHost = async (row: any) => {
   }
 }
 
+// 监听activeTerminalHost变化，自动连接终端
+watch(activeTerminalHost, async (newHost) => {
+  if (newHost) {
+    await initTerminal()
+    await nextTick()
+    connectSSH(newHost)
+  } else {
+    closeTerminal()
+  }
+})
+
+// 组件销毁时清理资源
+onBeforeUnmount(() => {
+  closeTerminal()
+})
+
 onMounted(() => {
   loadGroupTree()
   loadHostList()
@@ -2003,7 +2380,7 @@ onMounted(() => {
   justify-content: flex-end;
 }
 
-/* 操作按钮 */
+/* 旧的操作按钮样式 - 保留兼容 */
 .action-buttons {
   display: flex;
   gap: 8px;
@@ -2037,6 +2414,42 @@ onMounted(() => {
 .action-delete:hover {
   background-color: #fee;
   color: #f56c6c;
+}
+
+.action-refresh:hover {
+  background-color: #e8f4ff;
+  color: #409eff;
+}
+
+.hostname-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.host-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.hostname {
+  font-weight: 500;
+  color: #303133;
+}
+
+.ip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.config-info {
+  font-size: 13px;
+  color: #606266;
+}
+
+.text-muted {
+  color: #c0c4cc;
 }
 
 .black-button {
@@ -2170,6 +2583,27 @@ onMounted(() => {
   color: #606266;
 }
 
+/* 新的表格样式 */
+.host-table {
+  border-radius: 0 0 8px 8px;
+}
+
+.host-table :deep(.el-table__header-wrapper) {
+  border-radius: 0;
+}
+
+.host-table :deep(.el-table__header th) {
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.host-table :deep(.el-table__body tr) {
+  transition: all 0.2s ease;
+}
+
+.host-table :deep(.el-table__body tr:hover > td) {
+  background-color: #f8fafc !important;
+}
+
 /* 资源显示单元格样式 */
 .resource-cell {
   display: flex;
@@ -2201,37 +2635,8 @@ onMounted(() => {
   min-width: 30px;
 }
 
-/* 进程/端口单元格样式 */
-.process-port-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: center;
-  padding: 4px 0;
-}
-
-.process-port-cell .item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: #606266;
-}
-
-.process-port-cell .item .el-icon {
-  font-size: 14px;
-  color: #909399;
-}
-
 /* 配置单元格样式 */
 .config-cell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 40px;
-}
-
-.config-info {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2243,7 +2648,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 13px;
   color: #606266;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2251,7 +2656,7 @@ onMounted(() => {
 }
 
 .config-item .el-icon {
-  font-size: 12px;
+  font-size: 14px;
   color: #909399;
   flex-shrink: 0;
 }
@@ -2277,26 +2682,369 @@ onMounted(() => {
   height: auto;
 }
 
-.action-refresh:hover {
-  background-color: #e8f4ff;
-  color: #409eff;
-}
-
 /* 凭证单元格样式 */
 .credential-cell {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: flex-start;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 
 .credential-name {
-  font-size: 12px;
+  font-size: 13px;
   color: #303133;
   font-weight: 500;
 }
 
 .text-danger {
   color: #f56c6c !important;
+}
+
+/* 终端按钮样式 */
+.terminal-button {
+  background-color: #1a1a1a !important;
+  color: #ffffff !important;
+  border-color: #1a1a1a !important;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 500;
+  margin-right: 12px;
+}
+
+.terminal-button:hover {
+  background-color: #333333 !important;
+  border-color: #333333 !important;
+}
+
+/* 视图容器 */
+.view-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 终端视图 */
+.terminal-view {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+}
+
+.terminal-view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+}
+
+.terminal-view-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.terminal-view-title .el-icon {
+  font-size: 20px;
+  color: #d4af37;
+}
+
+.terminal-current-group {
+  margin-left: 8px;
+  font-size: 14px;
+  color: #858585;
+  font-weight: normal;
+}
+
+.terminal-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+/* 终端侧边栏 */
+.terminal-sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: #252526;
+  border-right: 1px solid #3e3e42;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 主机列表面板（中间） */
+.terminal-host-panel {
+  width: 320px;
+  min-width: 320px;
+  background: #2d2d30;
+  border-right: 1px solid #3e3e42;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-host-panel-header {
+  padding: 16px;
+  border-bottom: 1px solid #3e3e42;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.host-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #cccccc;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.host-panel-title .el-icon {
+  color: #4ec9b0;
+}
+
+.terminal-host-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.terminal-host-panel-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.terminal-host-panel-content::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+.terminal-host-panel-content::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 4px;
+}
+
+.terminal-host-panel-content::-webkit-scrollbar-thumb:hover {
+  background: #4e4e4e;
+}
+
+.terminal-host-count {
+  margin-left: auto;
+}
+
+.terminal-search {
+  margin-bottom: 12px;
+}
+
+.terminal-search :deep(.el-input__wrapper) {
+  background: #3c3c3c;
+  border: 1px solid #3e3e42;
+  box-shadow: none;
+}
+
+.terminal-search :deep(.el-input__inner) {
+  color: #cccccc;
+}
+
+.terminal-search :deep(.el-input__wrapper:hover) {
+  border-color: #555;
+}
+
+.terminal-search :deep(.el-input__wrapper.is-focus) {
+  border-color: #007acc;
+}
+
+/* 终端主机列表 */
+.terminal-host-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.terminal-host-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #2d2d30;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.terminal-host-item:hover {
+  background: #3e3e42;
+}
+
+.terminal-host-item.host-item-active {
+  background: #094771;
+  border: 1px solid #007acc;
+}
+
+.host-status-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.host-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.host-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #cccccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-item-ip {
+  font-size: 11px;
+  color: #858585;
+  margin-top: 2px;
+}
+
+.host-item-group {
+  font-size: 11px;
+  color: #4ec9b0;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 终端主区域 */
+.terminal-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  overflow: hidden;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #252526;
+  border-bottom: 1px solid #3e3e42;
+  flex-shrink: 0;
+}
+
+.terminal-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.terminal-icon {
+  font-size: 20px;
+  color: #4ec9b0;
+}
+
+.terminal-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #cccccc;
+}
+
+.terminal-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #858585;
+  margin-top: 2px;
+}
+
+.terminal-ip {
+  color: #9cdcfe;
+}
+
+.terminal-user {
+  color: #dcdcaa;
+}
+
+.terminal-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.terminal-actions :deep(.el-button) {
+  background: #3c3c3c;
+  border: 1px solid #3e3e42;
+  color: #cccccc;
+}
+
+.terminal-actions :deep(.el-button:hover) {
+  background: #4e4e4e;
+  border-color: #555;
+}
+
+.terminal-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #858585;
+}
+
+.placeholder-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.placeholder-text {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.placeholder-hint {
+  font-size: 13px;
+  color: #858585;
+}
+
+.terminal-body {
+  flex: 1;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+.terminal-wrapper {
+  width: 100%;
+  height: 100%;
+  background: #1e1e1e;
+  padding: 10px;
+}
+
+.xterm-container {
+  width: 100%;
+  height: 100%;
+}
+
+.xterm-container :deep(.xterm) {
+  padding: 10px;
+}
+
+.xterm-container :deep(.xterm .xterm-viewport) {
+  background-color: #1e1e1e !important;
+}
+
+.xterm-container :deep(.xterm .xterm-screen) {
+  padding: 0;
 }
 </style>

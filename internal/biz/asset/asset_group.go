@@ -13,6 +13,7 @@ type AssetGroup struct {
 	Description string        `gorm:"type:varchar(500);comment:分组描述" json:"description"`
 	Sort        int           `gorm:"type:int;default:0;comment:排序" json:"sort"`
 	Status      int           `gorm:"type:tinyint;default:1;comment:状态 1:启用 0:禁用" json:"status"`
+	HostCount   int           `gorm:"-" json:"hostCount"` // 主机数量（不存储在数据库）
 }
 
 // AssetGroupRequest 资产分组请求

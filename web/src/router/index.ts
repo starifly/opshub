@@ -60,10 +60,34 @@ const router = createRouter({
           meta: { title: '系统配置' }
         },
         {
+          path: 'audit/operation-logs',
+          name: 'OperationLogs',
+          component: () => import('@/views/audit/OperationLogs.vue'),
+          meta: { title: '操作日志' }
+        },
+        {
+          path: 'audit/login-logs',
+          name: 'LoginLogs',
+          component: () => import('@/views/audit/LoginLogs.vue'),
+          meta: { title: '登录日志' }
+        },
+        {
+          path: 'audit/data-logs',
+          name: 'DataLogs',
+          component: () => import('@/views/audit/DataLogs.vue'),
+          meta: { title: '数据日志' }
+        },
+        {
           path: 'asset/hosts',
           name: 'AssetHosts',
           component: () => import('@/views/asset/Hosts.vue'),
           meta: { title: '主机管理' }
+        },
+        {
+          path: 'asset/credentials',
+          name: 'AssetCredentials',
+          component: () => import('@/views/asset/Credentials.vue'),
+          meta: { title: '凭据管理' }
         },
         {
           path: 'asset/groups',
@@ -82,6 +106,12 @@ const router = createRouter({
           name: 'Profile',
           component: () => import('@/views/Profile.vue'),
           meta: { title: '个人信息' }
+        },
+        {
+          path: 'terminal',
+          name: 'Terminal',
+          component: () => import('@/views/asset/Terminal.vue'),
+          meta: { title: 'Web终端', hideSidebar: true }
         }
       ]
     }

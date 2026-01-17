@@ -12,11 +12,13 @@ import (
 	"github.com/ydcloud-dy/opshub/internal/conf"
 	"github.com/ydcloud-dy/opshub/internal/plugin"
 	assetserver "github.com/ydcloud-dy/opshub/internal/server/asset"
+	auditserver "github.com/ydcloud-dy/opshub/internal/server/audit"
 	"github.com/ydcloud-dy/opshub/internal/server/rbac"
 	"github.com/ydcloud-dy/opshub/internal/service"
 	appLogger "github.com/ydcloud-dy/opshub/pkg/logger"
 	"github.com/ydcloud-dy/opshub/pkg/middleware"
 	k8splugin "github.com/ydcloud-dy/opshub/plugins/kubernetes"
+	taskplugin "github.com/ydcloud-dy/opshub/plugins/task"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -55,6 +57,11 @@ func NewHTTPServer(conf *conf.Config, svc *service.Service, db *gorm.DB) *HTTPSe
 	// 注册 Kubernetes 插件
 	if err := pluginMgr.Register(k8splugin.New()); err != nil {
 		appLogger.Error("注册Kubernetes插件失败", zap.Error(err))
+	}
+
+	// 注册 Task 插件
+	if err := pluginMgr.Register(taskplugin.New()); err != nil {
+		appLogger.Error("注册Task插件失败", zap.Error(err))
 	}
 
 	// 注册路由
@@ -101,16 +108,23 @@ func (s *HTTPServer) registerRoutes(router *gin.Engine, jwtSecret string) {
 	rbacServer := rbac.NewHTTPServer(userService, roleService, departmentService, menuService, positionService, captchaService, authMiddleware)
 	rbacServer.RegisterRoutes(router)
 
+	// 创建 Audit 服务
+	operationLogService, loginLogService, dataLogService := auditserver.NewAuditServices(s.db)
+
 	// 创建 Asset 服务
-	assetGroupService, hostService := assetserver.NewAssetServices(s.db)
+	assetGroupService, hostService, terminalManager := assetserver.NewAssetServices(s.db)
 
 	// Asset 路由
-	assetServer := assetserver.NewHTTPServer(assetGroupService, hostService)
+	assetServer := assetserver.NewHTTPServer(assetGroupService, hostService, terminalManager)
 
 	// API v1 - 需要认证的接口
 	v1 := router.Group("/api/v1")
 	v1.Use(authMiddleware.AuthRequired())
 	{
+		// Audit 路由
+		auditHTTPServer := auditserver.NewHTTPService(operationLogService, loginLogService, dataLogService)
+		auditHTTPServer.RegisterRoutes(v1)
+
 		// 注册 Asset 路由
 		assetServer.RegisterRoutes(v1)
 

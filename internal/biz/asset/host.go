@@ -34,8 +34,6 @@ type Host struct {
 	DiskTotal    uint64        `gorm:"type:bigint;comment:磁盘总容量(字节)" json:"diskTotal"`
 	DiskUsed     uint64        `gorm:"type:bigint;comment:已用磁盘(字节)" json:"diskUsed"`
 	DiskUsage    float64       `gorm:"type:float;comment:磁盘使用率" json:"diskUsage"`
-	ProcessCount int           `gorm:"type:int;comment:进程数量" json:"processCount"`
-	PortCount    int           `gorm:"type:int;comment:端口数量" json:"portCount"`
 	Uptime       string        `gorm:"type:varchar(100);comment:运行时间" json:"uptime"`
 	Hostname     string        `gorm:"type:varchar(100);comment:主机名" json:"hostname"`
 }
@@ -83,8 +81,6 @@ type HostInfoVO struct {
 	DiskTotal    uint64  `json:"diskTotal"`
 	DiskUsed     uint64  `json:"diskUsed"`
 	DiskUsage    float64 `json:"diskUsage"`
-	ProcessCount int     `json:"processCount"`
-	PortCount    int     `json:"portCount"`
 	Uptime       string  `json:"uptime"`
 	Hostname     string  `json:"hostname"`
 }
@@ -117,13 +113,16 @@ func (req *HostRequest) ToModel() *Host {
 
 // Credential 凭证模型
 type Credential struct {
-	gorm.Model
+	ID          uint   `gorm:"primarykey" json:"id"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"deletedAt,omitempty"`
 	Name        string `gorm:"type:varchar(100);not null;comment:凭证名称" json:"name"`
 	Type        string `gorm:"type:varchar(20);not null;comment:认证方式 password/key" json:"type"`
 	Username    string `gorm:"type:varchar(100);comment:用户名" json:"username"`
-	Password    string `gorm:"type:varchar(500);comment:密码(加密)" json:"-"`
-	PrivateKey  string `gorm:"type:text;comment:私钥(加密)" json:"-"`
-	Passphrase  string `gorm:"type:varchar(500);comment:私钥密码(加密)" json:"-"`
+	Password    string `gorm:"type:varchar(500);comment:密码(加密)" json:"password,omitempty"`
+	PrivateKey  string `gorm:"type:text;comment:私钥(加密)" json:"privateKey,omitempty"`
+	Passphrase  string `gorm:"type:varchar(500);comment:私钥密码(加密)" json:"passphrase,omitempty"`
 	Description string `gorm:"type:varchar(500);comment:备注" json:"description"`
 }
 

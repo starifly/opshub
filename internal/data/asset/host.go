@@ -48,7 +48,7 @@ func (r *hostRepo) GetByID(ctx context.Context, id uint) (*asset.Host, error) {
 }
 
 // List 列表查询
-func (r *hostRepo) List(ctx context.Context, page, pageSize int, keyword string) ([]*asset.Host, int64, error) {
+func (r *hostRepo) List(ctx context.Context, page, pageSize int, keyword string, groupID *uint) ([]*asset.Host, int64, error) {
 	var hosts []*asset.Host
 	var total int64
 
@@ -56,6 +56,11 @@ func (r *hostRepo) List(ctx context.Context, page, pageSize int, keyword string)
 
 	if keyword != "" {
 		query = query.Where("name LIKE ? OR ip LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+	}
+
+	// 添加分组ID筛选
+	if groupID != nil && *groupID > 0 {
+		query = query.Where("group_id = ?", *groupID)
 	}
 
 	err := query.Order("id DESC").Count(&total).Error
@@ -99,8 +104,8 @@ type credentialRepo struct {
 
 // NewCredentialRepo 创建凭证仓库
 func NewCredentialRepo(db *gorm.DB) asset.CredentialRepo {
-	// AES-256要求密钥长度必须是32字节
-	encryptionKey := []byte("opshub-credential-key-32bytes!!")
+	// AES-256要求密钥长度必须是32字节（256位）
+	encryptionKey := []byte("opshub-enc-key-32-bytes-long!!!!")
 	return &credentialRepo{
 		db:           db,
 		encryptionKey: encryptionKey,

@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -103,8 +104,8 @@ func (uc *HostUseCase) GetByID(ctx context.Context, id uint) (*HostInfoVO, error
 }
 
 // List 分页查询主机列表
-func (uc *HostUseCase) List(ctx context.Context, page, pageSize int, keyword string) ([]*HostInfoVO, int64, error) {
-	hosts, total, err := uc.hostRepo.List(ctx, page, pageSize, keyword)
+func (uc *HostUseCase) List(ctx context.Context, page, pageSize int, keyword string, groupID *uint) ([]*HostInfoVO, int64, error) {
+	hosts, total, err := uc.hostRepo.List(ctx, page, pageSize, keyword, groupID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -181,8 +182,6 @@ func (uc *HostUseCase) toInfoVO(host *Host) *HostInfoVO {
 		DiskTotal:    host.DiskTotal,
 		DiskUsed:     host.DiskUsed,
 		DiskUsage:    host.DiskUsage,
-		ProcessCount: host.ProcessCount,
-		PortCount:    host.PortCount,
 		Uptime:       host.Uptime,
 		Hostname:     host.Hostname,
 	}
@@ -230,13 +229,12 @@ func (uc *HostUseCase) CollectHostInfo(ctx context.Context, hostID uint) error {
 	host.OS = info.OS
 	host.Kernel = info.Kernel
 	host.Arch = info.Arch
-	host.CPUCores = info.CPU.Cores
+	// 使用Threads作为CPU核心数，因为这是总CPU数量
+	host.CPUCores = info.CPU.Threads
 	host.CPUUsage = info.CPU.Usage
 	host.MemoryTotal = info.Memory.Total
 	host.MemoryUsed = info.Memory.Used
 	host.MemoryUsage = info.Memory.Usage
-	host.ProcessCount = info.ProcessCount
-	host.PortCount = info.PortCount
 	host.Uptime = info.Uptime
 	host.Hostname = info.Hostname
 	host.Status = 1 // 在线
@@ -245,10 +243,14 @@ func (uc *HostUseCase) CollectHostInfo(ctx context.Context, hostID uint) error {
 	// 计算磁盘总容量和使用量
 	var diskTotal, diskUsed uint64
 	if len(info.Disk) > 0 {
+		fmt.Printf("DEBUG 采集到的磁盘信息:\n")
 		for _, disk := range info.Disk {
+			fmt.Printf("  设备: %s, 挂载点: %s, 总容量: %d字节, 已用: %d字节\n",
+				disk.Device, disk.MountPoint, disk.Total, disk.Used)
 			diskTotal += disk.Total
 			diskUsed += disk.Used
 		}
+		fmt.Printf("  累加后: 总容量: %d字节, 已用: %d字节\n", diskTotal, diskUsed)
 	}
 	host.DiskTotal = diskTotal
 	host.DiskUsed = diskUsed
@@ -283,9 +285,19 @@ func (uc *HostUseCase) createSSHClient(host *Host, credential *Credential) (*ssh
 		// 实际上我们需要修改CredentialRepo的GetByID方法来返回解密后的数据
 		// 或者在这里解密
 		privateKey = []byte(credential.PrivateKey)
+
+		// 调试：打印私钥的详细信息
+		fmt.Printf("DEBUG 私钥信息:\n")
+		fmt.Printf("  长度: %d 字节\n", len(privateKey))
+		fmt.Printf("  前50字符: %q\n", string(privateKey[:min(50, len(privateKey))]))
+		fmt.Printf("  后50字符: %q\n", string(privateKey[max(0, len(privateKey)-50):]))
+		fmt.Printf("  是否包含BEGIN: %v\n", bytes.Contains(privateKey, []byte("BEGIN")))
+		fmt.Printf("  是否包含END: %v\n", bytes.Contains(privateKey, []byte("END")))
+		fmt.Printf("  行数: %d\n", bytes.Count(privateKey, []byte("\n"))+1)
+		fmt.Printf("  Passphrase长度: %d\n", len(credential.Passphrase))
 	}
 
-	return sshclient.NewClient(
+	client, err := sshclient.NewClient(
 		host.IP,
 		host.Port,
 		host.SSHUser,
@@ -293,6 +305,25 @@ func (uc *HostUseCase) createSSHClient(host *Host, credential *Credential) (*ssh
 		privateKey,
 		credential.Passphrase,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("创建SSH客户端失败: %w", err)
+	}
+
+	return client, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // TestConnection 测试主机连接
@@ -357,6 +388,21 @@ func (uc *HostUseCase) toCredentialVO(credential *Credential) *CredentialVO {
 	}
 }
 
+// GetCredentialRepo 获取凭证Repo（用于终端功能）
+func (uc *HostUseCase) GetCredentialRepo() CredentialRepo {
+	return uc.credentialRepo
+}
+
+// GetByIDDecrypted 根据ID获取凭证（解密后的，用于编辑时回显）
+func (uc *CredentialUseCase) GetByIDDecrypted(ctx context.Context, id uint) (*Credential, error) {
+	credential, err := uc.repo.GetByIDDecrypted(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return credential, nil
+}
+
 // CredentialUseCase 凭证用例
 type CredentialUseCase struct {
 	repo CredentialRepo
@@ -369,6 +415,16 @@ func NewCredentialUseCase(repo CredentialRepo) *CredentialUseCase {
 // Create 创建凭证
 func (uc *CredentialUseCase) Create(ctx context.Context, req *CredentialRequest) (*Credential, error) {
 	credential := req.ToModel()
+
+	// 调试：打印接收到的私钥信息
+	if credential.Type == "key" && credential.PrivateKey != "" {
+		fmt.Printf("DEBUG 创建凭证 - 接收到的私钥:\n")
+		fmt.Printf("  长度: %d 字节\n", len(credential.PrivateKey))
+		fmt.Printf("  前50字符: %q\n", credential.PrivateKey[:min(50, len(credential.PrivateKey))])
+		fmt.Printf("  后50字符: %q\n", credential.PrivateKey[max(0, len(credential.PrivateKey)-50):])
+		fmt.Printf("  是否包含BEGIN: %v\n", strings.Contains(credential.PrivateKey, "BEGIN"))
+		fmt.Printf("  是否包含END: %v\n", strings.Contains(credential.PrivateKey, "END"))
+	}
 
 	if err := uc.repo.Create(ctx, credential); err != nil {
 		return nil, err
