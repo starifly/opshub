@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/ydcloud-dy/opshub/internal/biz/asset"
 	"gorm.io/gorm"
@@ -24,6 +25,37 @@ func NewHostRepo(db *gorm.DB) asset.HostRepo {
 
 // Create 创建主机
 func (r *hostRepo) Create(ctx context.Context, host *asset.Host) error {
+	return r.db.WithContext(ctx).Create(host).Error
+}
+
+// CreateOrUpdate 创建或恢复主机（如果IP已被软删除则恢复）
+func (r *hostRepo) CreateOrUpdate(ctx context.Context, host *asset.Host) error {
+	// 先查找是否存在该IP的记录（包括软删除的）
+	var existing asset.Host
+	err := r.db.WithContext(ctx).Unscoped().Where("ip = ?", host.IP).First(&existing).Error
+
+	if err == nil {
+		// 找到了记录
+		if existing.DeletedAt.Valid {
+			// 记录已被软删除，恢复它
+			existing.Name = host.Name
+			existing.GroupID = host.GroupID
+			existing.SSHUser = host.SSHUser
+			existing.IP = host.IP
+			existing.Port = host.Port
+			existing.CredentialID = host.CredentialID
+			existing.Tags = host.Tags
+			existing.Description = host.Description
+			existing.Status = host.Status
+			existing.DeletedAt.Time = *new(time.Time) // 清除删除时间
+			existing.DeletedAt.Valid = false
+			return r.db.WithContext(ctx).Unscoped().Save(&existing).Error
+		}
+		// 记录未被删除，返回错误
+		return fmt.Errorf("IP地址 %s 已存在", host.IP)
+	}
+
+	// 没找到记录，创建新的
 	return r.db.WithContext(ctx).Create(host).Error
 }
 

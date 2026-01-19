@@ -2,6 +2,7 @@ package asset
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,7 +70,7 @@ func NewTerminalManager(hostUseCase *assetbiz.HostUseCase) *TerminalManager {
 }
 
 // CreateSession 创建SSH会话
-func (tm *TerminalManager) CreateSession(ctx context.Context, hostID uint) (*TerminalSession, error) {
+func (tm *TerminalManager) CreateSession(ctx context.Context, hostID uint, cols, rows uint16) (*TerminalSession, error) {
 	// 获取主机信息
 	hostVO, err := tm.hostUseCase.GetByID(ctx, hostID)
 	if err != nil {
@@ -130,15 +131,16 @@ func (tm *TerminalManager) CreateSession(ctx context.Context, hostID uint) (*Ter
 		return nil, fmt.Errorf("创建SSH会话失败: %w", err)
 	}
 
-	// 设置终端模式 - 最简单的配置
+	// 设置终端模式 - 简单可靠配置
 	modes := ssh.TerminalModes{
-		ssh.ECHO: 0,          // 启用回显
-		ssh.ICRNL: 1,         // 将CR转换为NL
-	ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
+		ssh.ECHO:          1, // SSH 服务器处理回显
+		ssh.ICRNL:         1, // 输入 CR 转 NL
+		ssh.ONLCR:         1, // 输出 NL 转 CR-NL
+		ssh.ISIG:          1, // 信号处理
+		ssh.IUTF8:         1, // UTF-8
 	}
 
-	if err := session.RequestPty("xterm-256color", 80, 40, modes); err != nil {
+	if err := session.RequestPty("xterm-256color", int(cols), int(rows), modes); err != nil {
 		session.Close()
 		client.Close()
 		return nil, fmt.Errorf("请求伪终端失败: %w", err)
@@ -238,6 +240,19 @@ func (s *HTTPServer) HandleSSHConnection(c *gin.Context) {
 	}
 	fmt.Printf("主机ID: %d\n", hostId)
 
+	// 从URL参数读取终端尺寸，默认80x24
+	colsStr := c.DefaultQuery("cols", "80")
+	rowsStr := c.DefaultQuery("rows", "24")
+	cols, err := strconv.ParseUint(colsStr, 10, 16)
+	if err != nil || cols == 0 {
+		cols = 80
+	}
+	rows, err := strconv.ParseUint(rowsStr, 10, 16)
+	if err != nil || rows == 0 {
+		rows = 24
+	}
+	fmt.Printf("终端尺寸: %dx%d (cols=%s, rows=%s)\n", cols, rows, colsStr, rowsStr)
+
 	// 升级到WebSocket
 	fmt.Printf("开始升级到WebSocket...\n")
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -251,7 +266,7 @@ func (s *HTTPServer) HandleSSHConnection(c *gin.Context) {
 
 	// 创建SSH会话
 	fmt.Printf("开始创建SSH会话...\n")
-	session, err := s.terminalManager.CreateSession(c.Request.Context(), uint(hostId))
+	session, err := s.terminalManager.CreateSession(c.Request.Context(), uint(hostId), uint16(cols), uint16(rows))
 	if err != nil {
 		fmt.Printf("SSH会话创建失败: %v\n", err)
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("连接失败: %s\r\n", err.Error())))
@@ -273,8 +288,8 @@ func (s *HTTPServer) HandleSSHConnection(c *gin.Context) {
 			n, err := session.StdoutPipe.Read(buf)
 			if n > 0 {
 				fmt.Printf("从SSH stdout读取 %d 字节\n", n)
-				// 发送文本消息而不是二进制消息
-				conn.WriteMessage(websocket.TextMessage, buf[:n])
+				// 使用二进制消息以保留原始字节（包括CR/LF控制字符）
+				conn.WriteMessage(websocket.BinaryMessage, buf[:n])
 			}
 			if err != nil {
 				fmt.Printf("SSH stdout读取结束: %v\n", err)
@@ -292,8 +307,8 @@ func (s *HTTPServer) HandleSSHConnection(c *gin.Context) {
 			n, err := session.StderrPipe.Read(buf)
 			if n > 0 {
 				fmt.Printf("从SSH stderr读取 %d 字节\n", n)
-				// 发送文本消息而不是二进制消息
-				conn.WriteMessage(websocket.TextMessage, buf[:n])
+				// 使用二进制消息以保留原始字节（包括CR/LF控制字符）
+				conn.WriteMessage(websocket.BinaryMessage, buf[:n])
 			}
 			if err != nil {
 				fmt.Printf("SSH stderr读取结束: %v\n", err)
@@ -311,8 +326,30 @@ func (s *HTTPServer) HandleSSHConnection(c *gin.Context) {
 			break
 		}
 
-		if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
-			fmt.Printf("从WebSocket收到 %d 字节，发送到SSH stdin\n", len(data))
+		if messageType == websocket.TextMessage {
+			// 尝试解析JSON消息（可能是resize命令）
+			var msg map[string]interface{}
+			if err := json.Unmarshal(data, &msg); err == nil {
+				if msgType, ok := msg["type"].(string); ok && msgType == "resize" {
+					cols, colsOk := msg["cols"].(float64)
+					rows, rowsOk := msg["rows"].(float64)
+					if colsOk && rowsOk {
+						fmt.Printf("收到resize请求: %dx%d\n", int(cols), int(rows))
+						// 调整SSH会话窗口大小
+						if err := session.SSHSession.WindowChange(int(rows), int(cols)); err != nil {
+							fmt.Printf("调整窗口大小失败: %v\n", err)
+						} else {
+							fmt.Printf("窗口大小调整成功\n")
+						}
+						continue
+					}
+				}
+			}
+			// 如果不是resize命令，当作普通输入发送到SSH
+			fmt.Printf("从WebSocket收到文本 %d 字节，发送到SSH stdin\n", len(data))
+			session.StdinPipe.Write(data)
+		} else if messageType == websocket.BinaryMessage {
+			fmt.Printf("从WebSocket收到二进制 %d 字节，发送到SSH stdin\n", len(data))
 			session.StdinPipe.Write(data)
 		}
 	}

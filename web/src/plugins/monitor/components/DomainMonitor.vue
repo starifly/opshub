@@ -157,7 +157,7 @@
                 </el-button>
               </el-tooltip>
               <el-tooltip content="立即检查" placement="top">
-                <el-button link class="action-btn action-check" @click="handleCheck(row)">
+                <el-button link class="action-btn action-check" @click="handleCheck(row)" :loading="row.checking">
                   <el-icon><Refresh /></el-icon>
                 </el-button>
               </el-tooltip>
@@ -211,6 +211,85 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 详情对话框 -->
+    <el-dialog
+      v-model="detailDialogVisible"
+      title="域名监控详情"
+      width="700px"
+      class="detail-dialog"
+    >
+      <div v-if="currentDomain" class="detail-content">
+        <div class="detail-info">
+          <div class="info-item">
+            <span class="info-label">域名:</span>
+            <span class="info-value">
+              <el-link :href="`http://${currentDomain.domain}`" target="_blank" type="primary">
+                {{ currentDomain.domain }}
+              </el-link>
+            </span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">状态:</span>
+            <el-tag v-if="currentDomain.status === 'normal'" type="success" effect="dark">正常</el-tag>
+            <el-tag v-else-if="currentDomain.status === 'abnormal'" type="danger" effect="dark">异常</el-tag>
+            <el-tag v-else type="warning" effect="dark">暂停</el-tag>
+          </div>
+          <div class="info-item">
+            <span class="info-label">响应时间:</span>
+            <span :class="['info-value', getResponseTimeClass(currentDomain.responseTime)]">
+              {{ currentDomain.responseTime }}ms
+            </span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">SSL证书:</span>
+            <el-tag v-if="currentDomain.sslValid" type="success" size="small">有效</el-tag>
+            <el-tag v-else type="danger" size="small">无效</el-tag>
+          </div>
+          <div class="info-item">
+            <span class="info-label">SSL到期:</span>
+            <span class="info-value">{{ currentDomain.sslExpiry || '-' }}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">检查间隔:</span>
+            <span class="info-value">{{ currentDomain.checkInterval }}分钟</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">最后检查:</span>
+            <span class="info-value">{{ currentDomain.lastCheck }}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">创建时间:</span>
+            <span class="info-value">{{ currentDomain.createdAt }}</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">更新时间:</span>
+            <span class="info-value">{{ currentDomain.updatedAt }}</span>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h4 class="section-title">检查历史</h4>
+          <el-empty v-if="!checkHistory.length" description="暂无检查历史" :image-size="80" />
+          <el-timeline v-else>
+            <el-timeline-item
+              v-for="item in checkHistory"
+              :key="item.id"
+              :timestamp="item.time"
+              placement="top"
+            >
+              <div class="history-item">
+                <span class="history-status" :class="`history-${item.status}`">
+                  {{ item.status === 'success' ? '正常' : '异常' }}
+                </span>
+                <span class="history-time">{{ item.responseTime }}ms</span>
+                <span v-if="item.message" class="history-message">{{ item.message }}</span>
+              </div>
+            </el-timeline-item>
+          </el-timeline>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -231,9 +310,19 @@ import {
   CircleClose,
   Warning
 } from '@element-plus/icons-vue'
+import {
+  getDomainMonitors,
+  getDomainMonitor,
+  createDomainMonitor,
+  updateDomainMonitor,
+  deleteDomainMonitor,
+  checkDomain,
+  getDomainStats
+} from '@/api/domain-monitor'
 
 const loading = ref(false)
 const dialogVisible = ref(false)
+const detailDialogVisible = ref(false)
 const dialogTitle = ref('')
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
@@ -252,6 +341,15 @@ const stats = ref({
   paused: 0
 })
 
+// 表格数据
+const tableData = ref<any[]>([])
+
+// 当前查看的域名
+const currentDomain = ref<any>(null)
+
+// 检查历史（模拟数据）
+const checkHistory = ref<any[]>([])
+
 // 表单数据
 const form = reactive({
   id: 0,
@@ -265,30 +363,6 @@ const rules: FormRules = {
   domain: [{ required: true, message: '请输入域名', trigger: 'blur' }],
   checkInterval: [{ required: true, message: '请输入检查间隔', trigger: 'blur' }]
 }
-
-// 模拟数据
-const tableData = ref([
-  {
-    id: 1,
-    domain: 'example.com',
-    status: 'normal',
-    responseTime: 120,
-    sslValid: true,
-    sslExpiry: '2025-06-15 23:59:59',
-    checkInterval: 5,
-    lastCheck: '2025-01-16 10:30:00'
-  },
-  {
-    id: 2,
-    domain: 'test.com',
-    status: 'abnormal',
-    responseTime: 0,
-    sslValid: false,
-    sslExpiry: '-',
-    checkInterval: 10,
-    lastCheck: '2025-01-16 10:25:00'
-  }
-])
 
 // 过滤后的数据
 const filteredData = computed(() => {
@@ -317,18 +391,21 @@ const handleReset = () => {
 }
 
 // 加载数据
-const loadData = () => {
+const loadData = async () => {
   loading.value = true
-  setTimeout(() => {
-    stats.value = {
-      total: tableData.value.length,
-      normal: tableData.value.filter(i => i.status === 'normal').length,
-      abnormal: tableData.value.filter(i => i.status === 'abnormal').length,
-      paused: tableData.value.filter(i => i.status === 'paused').length
-    }
+  try {
+    const [monitors, statsData] = await Promise.all([
+      getDomainMonitors(),
+      getDomainStats()
+    ])
+    tableData.value = monitors || []
+    stats.value = statsData || { total: 0, normal: 0, abnormal: 0, paused: 0 }
+  } catch (error: any) {
+    ElMessage.error('加载数据失败')
+    console.error(error)
+  } finally {
     loading.value = false
-    ElMessage.success('数据已刷新')
-  }, 500)
+  }
 }
 
 // 新增
@@ -347,28 +424,63 @@ const handleAdd = () => {
 // 编辑
 const handleEdit = (row: any) => {
   dialogTitle.value = '编辑域名监控'
-  Object.assign(form, row)
+  Object.assign(form, {
+    id: row.id,
+    domain: row.domain,
+    checkInterval: row.checkInterval,
+    enableSSL: row.enableSSL ?? true,
+    enableAlert: row.enableAlert ?? true
+  })
   dialogVisible.value = true
 }
 
 // 查看详情
-const handleView = (row: any) => {
-  ElMessage.info(`查看 ${row.domain} 的详情`)
+const handleView = async (row: any) => {
+  try {
+    loading.value = true
+    const detail = await getDomainMonitor(row.id)
+    currentDomain.value = detail
+    // TODO: 加载检查历史
+    checkHistory.value = []
+    detailDialogVisible.value = true
+  } catch (error: any) {
+    ElMessage.error('获取详情失败')
+    console.error(error)
+  } finally {
+    loading.value = false
+  }
 }
 
 // 立即检查
-const handleCheck = (row: any) => {
-  ElMessage.success(`正在检查 ${row.domain}...`)
+const handleCheck = async (row: any) => {
+  try {
+    row.checking = true
+    await checkDomain(row.id)
+    ElMessage.success('检查完成')
+    await loadData()
+  } catch (error: any) {
+    ElMessage.error('检查失败')
+    console.error(error)
+  } finally {
+    row.checking = false
+  }
 }
 
 // 删除
 const handleDelete = async (row: any) => {
   try {
     await ElMessageBox.confirm('确定要删除该域名监控吗？', '提示', { type: 'warning' })
+    loading.value = true
+    await deleteDomainMonitor(row.id)
     ElMessage.success('删除成功')
-    loadData()
-  } catch (error) {
-    if (error !== 'cancel') console.error(error)
+    await loadData()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败')
+      console.error(error)
+    }
+  } finally {
+    loading.value = false
   }
 }
 
@@ -379,12 +491,18 @@ const handleSubmit = async () => {
     if (valid) {
       submitting.value = true
       try {
-        // TODO: 调用API
-        ElMessage.success(form.id ? '更新成功' : '创建成功')
+        if (form.id) {
+          await updateDomainMonitor(form.id, form)
+          ElMessage.success('更新成功')
+        } else {
+          await createDomainMonitor(form)
+          ElMessage.success('创建成功')
+        }
         dialogVisible.value = false
-        loadData()
-      } catch (error) {
-        ElMessage.error('操作失败')
+        await loadData()
+      } catch (error: any) {
+        ElMessage.error(error.response?.data?.message || '操作失败')
+        console.error(error)
       } finally {
         submitting.value = false
       }
@@ -552,8 +670,9 @@ onMounted(() => {
 }
 
 .stat-icon-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: #fff;
+  background: linear-gradient(135deg, #000 0%, #1a1a1a 100%);
+  color: #d4af37;
+  border: 1px solid #d4af37;
 }
 
 .stat-icon-success {
@@ -710,5 +829,104 @@ onMounted(() => {
 :deep(.monitor-edit-dialog .el-dialog__footer) {
   padding: 16px 24px;
   border-top: 1px solid #f0f0f0;
+}
+
+/* 详情对话框 */
+:deep(.detail-dialog) {
+  border-radius: 12px;
+}
+
+:deep(.detail-dialog .el-dialog__header) {
+  background: linear-gradient(135deg, #000 0%, #1a1a1a 100%);
+  color: #d4af37;
+  border-radius: 8px 8px 0 0;
+  padding: 20px 24px;
+}
+
+:deep(.detail-dialog .el-dialog__title) {
+  color: #d4af37;
+}
+
+.detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.detail-info {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  padding: 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e4e7ed;
+}
+
+.info-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.info-label {
+  color: #606266;
+  font-weight: 600;
+  font-size: 14px;
+  min-width: 70px;
+}
+
+.info-value {
+  color: #303133;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.detail-section {
+  padding: 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e4e7ed;
+}
+
+.section-title {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  color: #303133;
+  font-weight: 600;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-status {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.history-success {
+  background: #f0f9ff;
+  color: #67c23a;
+}
+
+.history-error {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.history-time {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 13px;
+  color: #909399;
+}
+
+.history-message {
+  color: #606266;
+  font-size: 13px;
 }
 </style>

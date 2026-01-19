@@ -2,6 +2,8 @@ package rbac
 
 import (
 	"github.com/gin-gonic/gin"
+	auditbiz "github.com/ydcloud-dy/opshub/internal/biz/audit"
+	auditdata "github.com/ydcloud-dy/opshub/internal/data/audit"
 	rbacService "github.com/ydcloud-dy/opshub/internal/service/rbac"
 	rbacdata "github.com/ydcloud-dy/opshub/internal/data/rbac"
 	rbacbiz "github.com/ydcloud-dy/opshub/internal/biz/rbac"
@@ -139,12 +141,18 @@ func NewRBACServices(db *gorm.DB, jwtSecret string) (
 	menuRepo := rbacdata.NewMenuRepo(db)
 	positionRepo := rbacdata.NewPositionRepo(db)
 
+	// 初始化Audit Repository
+	loginLogRepo := auditdata.NewLoginLogRepo(db)
+
 	// 初始化UseCase
 	userUseCase := rbacbiz.NewUserUseCase(userRepo)
 	roleUseCase := rbacbiz.NewRoleUseCase(roleRepo)
 	deptUseCase := rbacbiz.NewDepartmentUseCase(deptRepo)
 	menuUseCase := rbacbiz.NewMenuUseCase(menuRepo)
 	positionUseCase := rbacbiz.NewPositionUseCase(positionRepo)
+
+	// 初始化Audit UseCase
+	loginLogUseCase := auditbiz.NewLoginLogUseCase(loginLogRepo)
 
 	// 初始化Service
 	authService := rbacService.NewAuthService(jwtSecret, roleUseCase)
@@ -158,6 +166,9 @@ func NewRBACServices(db *gorm.DB, jwtSecret string) (
 
 	// 设置验证码服务到用户服务
 	userService.SetCaptchaService(captchaService)
+
+	// 设置登录日志用例到用户服务
+	userService.SetLoginLogUseCase(loginLogUseCase)
 
 	return userService, roleService, departmentService, menuService, positionService, captchaService, authMiddleware
 }

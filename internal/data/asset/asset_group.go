@@ -79,6 +79,10 @@ func (r *assetGroupRepo) buildTree(groups []*asset.AssetGroup, parentID uint) []
 			children := r.buildTree(groups, group.ID)
 			if len(children) > 0 {
 				group.Children = children
+				// 累加子分组的主机数量
+				for _, child := range children {
+					group.HostCount += child.HostCount
+				}
 			}
 			tree = append(tree, group)
 		}

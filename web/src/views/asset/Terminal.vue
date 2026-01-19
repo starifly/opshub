@@ -118,6 +118,7 @@ const terminalRefs = ref<Record<string, HTMLElement>>({})
 const terminals = ref<Record<string, Terminal>>({})
 const fitAddons = ref<Record<string, FitAddon>>({})
 const wss = ref<Record<string, WebSocket>>({})
+const resizeCleanups = ref<Record<string, () => void>>({})
 
 // 终端标签页
 interface TerminalTab {
@@ -266,17 +267,17 @@ const openTerminal = async (host: any) => {
   console.log('当前 terminalTabs:', terminalTabs.value)
 
   const tabId = Date.now().toString()
-  const existingTab = terminalTabs.value.find(t => t.host && t.host.id === host.id)
 
-  if (existingTab) {
-    console.log('主机已存在标签页，切换到已有标签页:', existingTab.id)
-    activeTab.value = existingTab.id
-    return
+  // 计算相同主机名的标签数量，用于生成唯一的标签名称
+  const sameHostTabs = terminalTabs.value.filter(t => t.host && t.host.name === host.name)
+  let label = host.name
+  if (sameHostTabs.length > 0) {
+    label = `${host.name} (${sameHostTabs.length + 1})`
   }
 
   const newTab: TerminalTab = {
     id: tabId,
-    label: host.name,
+    label: label,
     host: host,
     connected: false,
     connecting: true
@@ -284,7 +285,7 @@ const openTerminal = async (host: any) => {
 
   console.log('创建新标签页:', newTab)
 
-  // 直接添加新标签页，不再替换空标签页
+  // 直接添加新标签页，每次双击都打开新标签
   terminalTabs.value.push(newTab)
 
   // 切换到新标签页
@@ -302,7 +303,24 @@ const initTerminal = async (tabId: string, host: any) => {
   await nextTick()
 
   const el = terminalRefs.value[tabId]
-  if (!el) return
+  if (!el) {
+    console.error('找不到终端容器元素')
+    return
+  }
+
+  // 等待容器获得正确的尺寸（不为0）
+  let attempts = 0
+  while ((el.clientWidth === 0 || el.clientHeight === 0) && attempts < 50) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    attempts++
+  }
+
+  if (el.clientWidth === 0 || el.clientHeight === 0) {
+    console.error('容器尺寸异常:', { width: el.clientWidth, height: el.clientHeight })
+    return
+  }
+
+  console.log('容器准备就绪，尺寸:', { width: el.clientWidth, height: el.clientHeight })
 
   // 创建新终端
   const term = new Terminal({
@@ -341,8 +359,49 @@ const initTerminal = async (tabId: string, host: any) => {
   terminals.value[tabId] = term
   fitAddons.value[tabId] = fitAddon
 
+  // 打印容器信息
+  console.log('容器元素:', el)
+  console.log('容器初始尺寸:', { width: el.clientWidth, height: el.clientHeight })
+
+  // 等待DOM完全渲染后再获取准确的终端尺寸
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 200))
+
+  console.log('等待后容器尺寸:', { width: el.clientWidth, height: el.clientHeight })
+
   // 适配终端大小
-  fitAddon.fit()
+  try {
+    fitAddon.fit()
+    console.log('首次fit后终端尺寸:', { cols: term.cols, rows: term.rows })
+  } catch (e) {
+    console.error('首次fit失败:', e)
+  }
+
+  // 再次等待并重新适配以确保尺寸正确
+  await new Promise(resolve => setTimeout(resolve, 100))
+  try {
+    fitAddon.fit()
+    console.log('二次fit后终端尺寸:', { cols: term.cols, rows: term.rows })
+  } catch (e) {
+    console.error('二次fit失败:', e)
+  }
+
+  const dims = { cols: term.cols, rows: term.rows }
+
+  // 检查cols是否异常小，如果是则使用默认值
+  if (dims.cols < 40) {
+    console.warn('计算出的cols值异常小:', dims.cols, '，使用默认值80')
+    dims.cols = 80
+  }
+  if (dims.rows < 10) {
+    console.warn('计算出的rows值异常小:', dims.rows, '，使用默认值24')
+    dims.rows = 24
+  }
+
+  console.log('=== 终端最终尺寸 ===')
+  console.log('cols:', dims.cols, 'rows:', dims.rows)
+  console.log('容器最终尺寸:', { width: el.clientWidth, height: el.clientHeight })
+  console.log('===================')
 
   term.writeln('\x1b[1;32m正在连接...\x1b[0m')
 
@@ -353,7 +412,8 @@ const initTerminal = async (tabId: string, host: any) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const backendPort = isDev ? ':9876' : (window.location.port ? ':' + window.location.port : '')
   const backendHost = isDev ? window.location.hostname : window.location.host
-  const wsUrl = `${protocol}//${backendHost}${backendPort}/api/v1/asset/terminal/${host.id}?token=${token}`
+  // 将终端尺寸作为参数传递
+  const wsUrl = `${protocol}//${backendHost}${backendPort}/api/v1/asset/terminal/${host.id}?token=${token}&cols=${dims.cols}&rows=${dims.rows}`
 
   console.log('WebSocket连接URL:', wsUrl)
 
@@ -389,10 +449,20 @@ const initTerminal = async (tabId: string, host: any) => {
     }
   }
 
-  ws.onmessage = (event) => {
+  ws.onmessage = async (event) => {
     if (term) {
-      // 直接写入，WebSocket 现在发送的是文本消息
-      term.write(event.data)
+      // WebSocket现在发送二进制消息，需要正确处理
+      if (event.data instanceof Blob) {
+        const arrayBuffer = await event.data.arrayBuffer()
+        const uint8Array = new Uint8Array(arrayBuffer)
+        term.write(uint8Array)
+      } else if (event.data instanceof ArrayBuffer) {
+        const uint8Array = new Uint8Array(event.data)
+        term.write(uint8Array)
+      } else {
+        // 兼容文本消息
+        term.write(event.data)
+      }
     }
   }
 
@@ -415,12 +485,67 @@ const initTerminal = async (tabId: string, host: any) => {
   }
 
   wss.value[tabId] = ws
+
+  // 添加窗口resize事件监听
+  const handleResize = () => {
+    if (fitAddon && term && ws.readyState === WebSocket.OPEN) {
+      try {
+        fitAddon.fit()
+        const newDims = { cols: term.cols, rows: term.rows }
+        console.log('终端尺寸调整为:', newDims)
+
+        // 发送resize消息到后端
+        const resizeMsg = JSON.stringify({
+          type: 'resize',
+          cols: newDims.cols,
+          rows: newDims.rows
+        })
+        ws.send(resizeMsg)
+      } catch (e) {
+        console.error('resize失败:', e)
+      }
+    }
+  }
+
+  // 使用防抖处理resize事件
+  let resizeTimer: ReturnType<typeof setTimeout>
+  const debouncedResize = () => {
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(handleResize, 100)
+  }
+
+  window.addEventListener('resize', debouncedResize)
+
+  // 保存cleanup函数
+  const cleanup = () => {
+    window.removeEventListener('resize', debouncedResize)
+    clearTimeout(resizeTimer)
+  }
+
+  // 保存到resizeCleanups，以便在标签关闭时调用
+  resizeCleanups.value[tabId] = cleanup
+
+  // 在ws关闭时清理
+  const originalOnClose = ws.onclose
+  ws.onclose = (e) => {
+    cleanup()
+    delete resizeCleanups.value[tabId]
+    if (originalOnClose) {
+      originalOnClose.call(ws, e as CloseEvent)
+    }
+  }
 }
 
 // 关闭指定标签
 const closeTerminal = (tabId: string) => {
   const tab = terminalTabs.value.find(t => t.id === tabId)
   if (!tab) return
+
+  // 清理resize监听器
+  if (resizeCleanups.value[tabId]) {
+    resizeCleanups.value[tabId]()
+    delete resizeCleanups.value[tabId]
+  }
 
   // 关闭WebSocket
   if (wss.value[tabId]) {
@@ -464,15 +589,47 @@ const handleTabRemove = (tabId: string) => {
 onMounted(async () => {
   await loadGroupTree()
   await loadAllHosts()
+
+  // 检查是否有从 Hosts 页面双击传来的主机列表
+  const dblClickHosts = sessionStorage.getItem('dblClickHosts')
+  if (dblClickHosts) {
+    try {
+      const hosts = JSON.parse(dblClickHosts)
+      if (Array.isArray(hosts) && hosts.length > 0) {
+        // 清空 sessionStorage
+        sessionStorage.removeItem('dblClickHosts')
+
+        // 为每个主机打开一个终端标签
+        for (const host of hosts) {
+          // 等待一下，避免同时打开多个连接
+          await new Promise(resolve => setTimeout(resolve, 100))
+          openTerminal(host)
+        }
+      }
+    } catch (e) {
+      console.error('解析双击主机列表失败:', e)
+    }
+  }
 })
 
 // 组件销毁时关闭所有连接
 onBeforeUnmount(() => {
+  // 清理所有resize监听器
+  Object.keys(resizeCleanups.value).forEach(tabId => {
+    if (resizeCleanups.value[tabId]) {
+      resizeCleanups.value[tabId]()
+    }
+  })
+  resizeCleanups.value = {}
+
+  // 关闭所有WebSocket
   Object.keys(wss.value).forEach(tabId => {
     if (wss.value[tabId]) {
       wss.value[tabId].close()
     }
   })
+
+  // 销毁所有终端
   Object.values(terminals.value).forEach(term => {
     term?.dispose()
   })
@@ -811,10 +968,12 @@ onBeforeUnmount(() => {
 .xterm-container {
   width: 100%;
   height: 100%;
+  padding: 8px;
+  box-sizing: border-box;
 }
 
 .xterm-container :deep(.xterm) {
-  padding: 8px;
+  height: 100%;
 }
 
 .xterm-container :deep(.xterm .xterm-viewport) {

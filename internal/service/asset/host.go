@@ -1,10 +1,13 @@
 package asset
 
 import (
+	"bytes"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 	"github.com/ydcloud-dy/opshub/internal/biz/asset"
 	"github.com/ydcloud-dy/opshub/pkg/response"
 )
@@ -409,4 +412,134 @@ func (s *HostService) BatchCollectHostInfo(c *gin.Context) {
 	}
 
 	response.SuccessWithMessage(c, "批量采集完成", nil)
+}
+
+// BatchDeleteHosts 批量删除主机
+func (s *HostService) BatchDeleteHosts(c *gin.Context) {
+	var req struct {
+		HostIDs []uint `json:"hostIds" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.ErrorCode(c, http.StatusBadRequest, "参数错误: "+err.Error())
+		return
+	}
+
+	if err := s.hostUseCase.BatchDelete(c.Request.Context(), req.HostIDs); err != nil {
+		response.ErrorCode(c, http.StatusInternalServerError, "批量删除失败: "+err.Error())
+		return
+	}
+
+	response.SuccessWithMessage(c, "批量删除成功", nil)
+}
+
+// DownloadExcelTemplate 下载Excel导入模板
+func (s *HostService) DownloadExcelTemplate(c *gin.Context) {
+	f := excelize.NewFile()
+	// 获取默认sheet名称 (默认是 "Sheet1")
+	sheetName := f.GetSheetName(0)
+
+	// 设置列标题
+	headers := []string{"主机名称*", "分组编码", "SSH用户名*", "IP地址*", "SSH端口*", "凭证名称", "标签", "备注"}
+
+	// 创建标题行样式
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold: true,
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#E6E6FA"},
+			Pattern: 1,
+		},
+		Alignment: &excelize.Alignment{
+			Horizontal: "center",
+			Vertical:   "center",
+		},
+	})
+
+	// 设置列宽
+	f.SetColWidth(sheetName, "A", "H", 20)
+
+	// 写入标题行
+	for i, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheetName, cell, header)
+		f.SetCellStyle(sheetName, cell, cell, headerStyle)
+	}
+
+	// 添加示例数据
+	examples := [][]string{
+		{"Web服务器-01", "BIBF", "root", "192.168.1.100", "22", "生产环境凭证", "web,生产", "Web应用服务器"},
+		{"数据库服务器", "TEST", "ubuntu", "192.168.1.200", "22", "", "db,测试", "MySQL数据库服务器"},
+	}
+	for i, example := range examples {
+		for j, val := range example {
+			cell, _ := excelize.CoordinatesToCellName(j+1, i+2)
+			f.SetCellValue(sheetName, cell, val)
+		}
+	}
+
+	// 添加说明行
+	for i, note := range []string{
+		"说明：",
+		"1. 带*号的是必填项",
+		"2. 分组编码：需要在系统中已存在，可在资产分组管理中查看",
+		"3. SSH端口：默认22",
+		"4. 凭证名称：需要在系统中已存在，可在凭证管理中查看",
+		"5. 标签：多个标签用逗号分隔",
+	} {
+		cell, _ := excelize.CoordinatesToCellName(1, 5+i)
+		f.SetCellValue(sheetName, cell, note)
+	}
+
+	// 生成到buffer
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		response.ErrorCode(c, http.StatusInternalServerError, "生成模板文件失败")
+		return
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", "attachment; filename=host_import_template.xlsx")
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
+}
+
+// ImportFromExcel Excel批量导入主机
+func (s *HostService) ImportFromExcel(c *gin.Context) {
+	// 获取上传的文件
+	file, err := c.FormFile("file")
+	if err != nil {
+		response.ErrorCode(c, http.StatusBadRequest, "请选择要上传的文件")
+		return
+	}
+
+	// 检查文件类型
+	if file.Header.Get("Content-Type") != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" &&
+		!strings.HasSuffix(file.Filename, ".xlsx") {
+		response.ErrorCode(c, http.StatusBadRequest, "请上传Excel文件(.xlsx格式)")
+		return
+	}
+
+	// 读取文件内容
+	src, err := file.Open()
+	if err != nil {
+		response.ErrorCode(c, http.StatusBadRequest, "打开文件失败")
+		return
+	}
+	defer src.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(src); err != nil {
+		response.ErrorCode(c, http.StatusBadRequest, "读取文件失败")
+		return
+	}
+
+	// 调用导入方法
+	result, err := s.hostUseCase.ImportFromExcel(c.Request.Context(), buf.Bytes())
+	if err != nil {
+		response.ErrorCode(c, http.StatusInternalServerError, "导入失败: "+err.Error())
+		return
+	}
+
+	response.Success(c, result)
 }

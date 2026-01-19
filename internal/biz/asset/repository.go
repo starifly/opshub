@@ -14,6 +14,7 @@ type AssetGroupRepo interface {
 
 type HostRepo interface {
 	Create(ctx context.Context, host *Host) error
+	CreateOrUpdate(ctx context.Context, host *Host) error
 	Update(ctx context.Context, host *Host) error
 	Delete(ctx context.Context, id uint) error
 	GetByID(ctx context.Context, id uint) (*Host, error)

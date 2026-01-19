@@ -89,3 +89,22 @@ export const testHostConnection = (id: number) => {
 export const batchCollectHostInfo = (data: { hostIds: number[] }) => {
   return request.post('/api/v1/hosts/batch-collect', data)
 }
+
+// 下载Excel导入模板
+export const downloadExcelTemplate = () => {
+  return request.get('/api/v1/hosts/template/download', { responseType: 'blob' })
+}
+
+// Excel批量导入主机
+export const importFromExcel = (file: File) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request.post('/api/v1/hosts/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+// 批量删除主机
+export const batchDeleteHosts = (hostIds: number[]) => {
+  return request.post('/api/v1/hosts/batch-delete', { hostIds })
+}

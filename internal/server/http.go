@@ -18,6 +18,7 @@ import (
 	appLogger "github.com/ydcloud-dy/opshub/pkg/logger"
 	"github.com/ydcloud-dy/opshub/pkg/middleware"
 	k8splugin "github.com/ydcloud-dy/opshub/plugins/kubernetes"
+	monitorplugin "github.com/ydcloud-dy/opshub/plugins/monitor"
 	taskplugin "github.com/ydcloud-dy/opshub/plugins/task"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -45,6 +46,7 @@ func NewHTTPServer(conf *conf.Config, svc *service.Service, db *gorm.DB) *HTTPSe
 	router.Use(middleware.Logger())
 	router.Use(middleware.Recovery())
 	router.Use(middleware.CORS())
+	router.Use(middleware.AuditLogOperation(db))
 
 	// 创建插件管理器
 	pluginMgr := plugin.NewManager(db)
@@ -62,6 +64,11 @@ func NewHTTPServer(conf *conf.Config, svc *service.Service, db *gorm.DB) *HTTPSe
 	// 注册 Task 插件
 	if err := pluginMgr.Register(taskplugin.New()); err != nil {
 		appLogger.Error("注册Task插件失败", zap.Error(err))
+	}
+
+	// 注册 Monitor 插件
+	if err := pluginMgr.Register(monitorplugin.New()); err != nil {
+		appLogger.Error("注册Monitor插件失败", zap.Error(err))
 	}
 
 	// 注册路由

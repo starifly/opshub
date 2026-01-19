@@ -77,7 +77,7 @@ type SysDataLog struct {
 	RealName string `gorm:"type:varchar(50);comment:真实姓名" json:"realName"`
 
 	// 数据信息
-	TableName  string `gorm:"type:varchar(50);comment:表名" json:"tableName"`   // sys_user, sys_role等
+	TableName  string `gorm:"column:table_name;type:varchar(50);comment:表名" json:"tableName"`   // sys_user, sys_role等
 	RecordID   uint   `gorm:"index;comment:记录ID" json:"recordId"`             // 数据记录的主键ID
 	Action     string `gorm:"type:varchar(20);comment:操作类型" json:"action"`   // create, update, delete
 	OldData    string `gorm:"type:longtext;comment:原始数据" json:"oldData"`     // JSON格式的原始数据
@@ -87,4 +87,18 @@ type SysDataLog struct {
 	// 环境信息
 	IP        string `gorm:"type:varchar(50);comment:IP地址" json:"ip"`
 	UserAgent string `gorm:"type:varchar(500);comment:用户代理" json:"userAgent"`
+}
+
+// Table 指定表名
+func (SysDataLog) Table() string {
+	return "sys_data_log"
+}
+
+// TableName 指定表名
+func (SysOperationLog) TableName() string {
+	return "sys_operation_log"
+}
+
+func (SysLoginLog) TableName() string {
+	return "sys_login_log"
 }

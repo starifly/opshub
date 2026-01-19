@@ -1,10 +1,13 @@
 package rbac
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/ydcloud-dy/opshub/internal/biz/audit"
 	"github.com/ydcloud-dy/opshub/internal/biz/rbac"
 	"github.com/ydcloud-dy/opshub/pkg/response"
 	appLogger "github.com/ydcloud-dy/opshub/pkg/logger"
@@ -12,9 +15,10 @@ import (
 )
 
 type UserService struct {
-	userUseCase    *rbac.UserUseCase
-	authService    *AuthService
-	captchaService *CaptchaService
+	userUseCase     *rbac.UserUseCase
+	authService     *AuthService
+	captchaService  *CaptchaService
+	loginLogUseCase *audit.LoginLogUseCase
 }
 
 func NewUserService(userUseCase *rbac.UserUseCase, authService *AuthService) *UserService {
@@ -27,6 +31,11 @@ func NewUserService(userUseCase *rbac.UserUseCase, authService *AuthService) *Us
 // SetCaptchaService 设置验证码服务（通过依赖注入）
 func (s *UserService) SetCaptchaService(captchaService *CaptchaService) {
 	s.captchaService = captchaService
+}
+
+// SetLoginLogUseCase 设置登录日志用例（通过依赖注入）
+func (s *UserService) SetLoginLogUseCase(loginLogUseCase *audit.LoginLogUseCase) {
+	s.loginLogUseCase = loginLogUseCase
 }
 
 // LoginRequest 登录请求
@@ -64,6 +73,10 @@ func (s *UserService) Login(c *gin.Context) {
 	// 添加调试日志
 	appLogger.Info("用户登录尝试", zap.String("username", req.Username))
 
+	// 获取客户端信息
+	clientIP := c.ClientIP()
+	userAgent := c.Request.UserAgent()
+
 	// 验证验证码
 	captchaId := req.CaptchaId
 	if captchaId == "" {
@@ -71,18 +84,23 @@ func (s *UserService) Login(c *gin.Context) {
 	}
 
 	if captchaId == "" || req.CaptchaCode == "" {
+		// 记录登录日志 - 验证码为空
+		s.recordLoginLog(req.Username, "web", "failed", clientIP, userAgent, "验证码为空", 0)
 		response.ErrorCode(c, http.StatusOK, "请输入验证码")
 		return
 	}
 
 	// 使用验证码服务验证
 	if s.captchaService == nil {
+		s.recordLoginLog(req.Username, "web", "failed", clientIP, userAgent, "验证码服务未初始化", 0)
 		response.ErrorCode(c, http.StatusOK, "验证码服务未初始化")
 		return
 	}
 
 	if !s.captchaService.VerifyCaptchaDirect(captchaId, req.CaptchaCode) {
 		appLogger.Info("验证码验证失败", zap.String("username", req.Username), zap.String("captchaId", captchaId))
+		// 记录登录日志 - 验证码错误
+		s.recordLoginLog(req.Username, "web", "failed", clientIP, userAgent, "验证码错误", 0)
 		response.ErrorCode(c, http.StatusOK, "验证码错误，请重新输入")
 		return
 	}
@@ -90,17 +108,23 @@ func (s *UserService) Login(c *gin.Context) {
 	user, err := s.userUseCase.ValidatePassword(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		appLogger.Error("登录失败", zap.String("username", req.Username), zap.Error(err))
+		// 记录登录日志 - 用户名或密码错误
+		s.recordLoginLog(req.Username, "web", "failed", clientIP, userAgent, err.Error(), 0)
 		response.ErrorCode(c, http.StatusOK, err.Error())
 		return
 	}
 
 	if user.Status != 1 {
+		// 记录登录日志 - 用户被禁用
+		s.recordLoginLog(req.Username, "web", "failed", clientIP, userAgent, "用户已被禁用", user.ID)
 		response.ErrorCode(c, http.StatusOK, "用户已被禁用")
 		return
 	}
 
 	token, err := s.authService.GenerateToken(user.ID, user.Username)
 	if err != nil {
+		// 记录登录日志 - 生成token失败
+		s.recordLoginLog(req.Username, "web", "failed", clientIP, userAgent, "生成token失败", user.ID)
 		response.ErrorCode(c, http.StatusInternalServerError, "生成token失败")
 		return
 	}
@@ -111,12 +135,53 @@ func (s *UserService) Login(c *gin.Context) {
 	// 更新最后登录时间
 	_ = s.userUseCase.Update(c.Request.Context(), user)
 
+	// 记录登录日志 - 登录成功
+	s.recordLoginLog(req.Username, "web", "success", clientIP, userAgent, "", user.ID)
+
 	appLogger.Info("用户登录成功", zap.String("username", req.Username))
 
 	response.Success(c, LoginResponse{
 		Token: token,
 		User:  user,
 	})
+}
+
+// recordLoginLog 记录登录日志
+func (s *UserService) recordLoginLog(username, loginType, loginStatus, ip, userAgent, failReason string, userID uint) {
+	if s.loginLogUseCase == nil {
+		return
+	}
+
+	realName := ""
+	if userID != 0 {
+		// 获取用户真实姓名
+		if user, err := s.userUseCase.GetByID(context.Background(), userID); err == nil {
+			realName = user.RealName
+		}
+	}
+
+	log := &audit.SysLoginLog{
+		UserID:      userID,
+		Username:    username,
+		RealName:    realName,
+		LoginType:   loginType,
+		LoginStatus: loginStatus,
+		LoginTime:   time.Now(),
+		IP:          ip,
+		Location:    "", // 可以根据IP解析地理位置
+		UserAgent:   userAgent,
+		FailReason:  failReason,
+	}
+
+	// 异步保存登录日志
+	go func() {
+		if err := s.loginLogUseCase.Create(context.Background(), log); err != nil {
+			appLogger.Error("保存登录日志失败",
+				zap.Error(err),
+				zap.String("username", username),
+			)
+		}
+	}()
 }
 
 // Register 用户注册

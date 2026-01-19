@@ -23,6 +23,11 @@ request.interceptors.request.use(
 // 响应拦截器
 request.interceptors.response.use(
   (response) => {
+    // blob类型响应直接返回
+    if (response.config.responseType === 'blob') {
+      return response.data
+    }
+
     const res = response.data
     // 检查业务状态码
     if (res.code !== 0 && res.code !== 200) {

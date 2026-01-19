@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/xuri/excelize/v2"
 	"github.com/ydcloud-dy/opshub/pkg/collector"
 	sshclient "github.com/ydcloud-dy/opshub/pkg/ssh"
 	"github.com/ydcloud-dy/opshub/pkg/utils"
@@ -30,15 +32,9 @@ func NewHostUseCase(hostRepo HostRepo, credentialRepo CredentialRepo, groupRepo 
 
 // Create 创建主机
 func (uc *HostUseCase) Create(ctx context.Context, req *HostRequest) (*Host, error) {
-	// 检查IP是否已存在
-	existHost, err := uc.hostRepo.GetByIP(ctx, req.IP)
-	if err == nil && existHost != nil {
-		return nil, fmt.Errorf("IP地址 %s 已存在", req.IP)
-	}
-
 	host := req.ToModel()
 
-	if err := uc.hostRepo.Create(ctx, host); err != nil {
+	if err := uc.hostRepo.CreateOrUpdate(ctx, host); err != nil {
 		return nil, err
 	}
 
@@ -365,6 +361,16 @@ func (uc *HostUseCase) BatchCollectHostInfo(ctx context.Context, hostIDs []uint)
 		if err := uc.CollectHostInfo(ctx, hostID); err != nil {
 			// 记录错误但继续处理其他主机
 			fmt.Printf("采集主机 %d 信息失败: %v\n", hostID, err)
+		}
+	}
+	return nil
+}
+
+// BatchDelete 批量删除主机
+func (uc *HostUseCase) BatchDelete(ctx context.Context, hostIDs []uint) error {
+	for _, hostID := range hostIDs {
+		if err := uc.hostRepo.Delete(ctx, hostID); err != nil {
+			return fmt.Errorf("删除主机 %d 失败: %w", hostID, err)
 		}
 	}
 	return nil
@@ -713,4 +719,146 @@ func (uc *CloudAccountUseCase) listTencentInstances(account *CloudAccount, regio
 	// TODO: 实现腾讯云SDK调用
 	// 这里先返回空列表
 	return []CloudInstance{}, nil
+}
+
+// ExcelImportResult Excel导入结果
+type ExcelImportResult struct {
+	SuccessCount int      `json:"successCount"`
+	FailedCount  int      `json:"failedCount"`
+	FailedRows   []int    `json:"failedRows,omitempty"`
+	Errors       []string `json:"errors,omitempty"`
+}
+
+// ImportFromExcel 从Excel批量导入主机
+func (uc *HostUseCase) ImportFromExcel(ctx context.Context, excelData []byte) (*ExcelImportResult, error) {
+	// 使用excelize读取Excel文件
+	f, err := excelize.OpenReader(bytes.NewReader(excelData))
+	if err != nil {
+		return nil, fmt.Errorf("读取Excel文件失败: %w", err)
+	}
+	defer f.Close()
+
+	// 获取第一个sheet
+	sheets := f.GetSheetList()
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("Excel文件中没有工作表")
+	}
+
+	// 读取数据（跳过标题行，从第2行开始）
+	rows, err := f.GetRows(sheets[0])
+	if err != nil {
+		return nil, fmt.Errorf("读取Excel数据失败: %w", err)
+	}
+
+	result := &ExcelImportResult{
+		FailedRows: make([]int, 0),
+		Errors:     make([]string, 0),
+	}
+
+	// 获取所有分组和凭证映射
+	groups, _ := uc.groupRepo.GetAll(ctx)
+	groupCodeMap := make(map[string]uint)
+	for _, g := range groups {
+		groupCodeMap[g.Code] = g.ID
+	}
+
+	credentials, _ := uc.credentialRepo.GetAll(ctx)
+	credentialNameMap := make(map[string]uint)
+	for _, c := range credentials {
+		credentialNameMap[c.Name] = c.ID
+	}
+
+	// 从第2行开始处理数据（第1行是标题）
+	for i, row := range rows {
+		rowNum := i + 1
+		if i == 0 {
+			// 跳过标题行
+			continue
+		}
+
+		// 检查行是否为空
+		if len(row) < 4 {
+			continue
+		}
+
+		// 解析Excel行数据
+		// 列顺序: 主机名称 | 分组编码 | SSH用户名 | IP地址 | SSH端口 | 凭证名称 | 标签 | 备注
+		name := strings.TrimSpace(row[0])
+		groupCode := strings.TrimSpace(row[1])
+		sshUser := strings.TrimSpace(row[2])
+		ip := strings.TrimSpace(row[3])
+		port := 22
+		if len(row) > 4 && row[4] != "" {
+			p, err := strconv.Atoi(strings.TrimSpace(row[4]))
+			if err == nil {
+				port = p
+			}
+		}
+		credentialName := ""
+		if len(row) > 5 {
+			credentialName = strings.TrimSpace(row[5])
+		}
+		tags := ""
+		if len(row) > 6 {
+			tags = strings.TrimSpace(row[6])
+		}
+		description := ""
+		if len(row) > 7 {
+			description = strings.TrimSpace(row[7])
+		}
+
+		// 验证必填字段
+		if name == "" || sshUser == "" || ip == "" {
+			result.FailedCount++
+			result.FailedRows = append(result.FailedRows, rowNum)
+			result.Errors = append(result.Errors, fmt.Sprintf("第%d行: 缺少必填字段", rowNum))
+			continue
+		}
+
+		// 验证IP格式
+		hostReq := &HostRequest{
+			Name:        name,
+			SSHUser:     sshUser,
+			IP:          ip,
+			Port:        port,
+			Tags:        tags,
+			Description: description,
+		}
+
+		// 查找分组ID
+		if groupCode != "" {
+			if groupID, ok := groupCodeMap[groupCode]; ok {
+				hostReq.GroupID = groupID
+			} else {
+				result.FailedCount++
+				result.FailedRows = append(result.FailedRows, rowNum)
+				result.Errors = append(result.Errors, fmt.Sprintf("第%d行: 分组编码'%s'不存在", rowNum, groupCode))
+				continue
+			}
+		}
+
+		// 查找凭证ID
+		if credentialName != "" {
+			if credentialID, ok := credentialNameMap[credentialName]; ok {
+				hostReq.CredentialID = credentialID
+			} else {
+				result.FailedCount++
+				result.FailedRows = append(result.FailedRows, rowNum)
+				result.Errors = append(result.Errors, fmt.Sprintf("第%d行: 凭证名称'%s'不存在", rowNum, credentialName))
+				continue
+			}
+		}
+
+		// 创建主机
+		host := hostReq.ToModel()
+		if err := uc.hostRepo.CreateOrUpdate(ctx, host); err != nil {
+			result.FailedCount++
+			result.FailedRows = append(result.FailedRows, rowNum)
+			result.Errors = append(result.Errors, fmt.Sprintf("第%d行: %s", rowNum, err.Error()))
+		} else {
+			result.SuccessCount++
+		}
+	}
+
+	return result, nil
 }

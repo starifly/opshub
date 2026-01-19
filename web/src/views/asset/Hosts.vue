@@ -157,6 +157,15 @@
           </div>
 
           <div class="filter-actions">
+            <el-button
+              v-if="selectedHosts.length > 0"
+              type="danger"
+              plain
+              @click="handleBatchDelete"
+            >
+              <el-icon style="margin-right: 4px;"><Delete /></el-icon>
+              批量删除 ({{ selectedHosts.length }})
+            </el-button>
             <el-button class="reset-btn" @click="handleReset">
               <el-icon style="margin-right: 4px;"><RefreshLeft /></el-icon>
               重置
@@ -186,7 +195,9 @@
             class="modern-table"
             :header-cell-style="{ background: '#fafbfc', color: '#606266', fontWeight: '600' }"
             @row-dblclick="handleHostDblClick"
+            @selection-change="handleHostSelectionChange"
           >
+            <el-table-column type="selection" width="55" fixed="left" />
             <el-table-column label="主机名" prop="name" min-width="150" fixed="left">
               <template #default="{ row }">
                 <div class="hostname-cell">
@@ -1001,7 +1012,10 @@ import {
   importFromCloud,
   collectHostInfo,
   testHostConnection,
-  batchCollectHostInfo
+  batchCollectHostInfo,
+  downloadExcelTemplate,
+  importFromExcel,
+  batchDeleteHosts
 } from '@/api/host'
 
 // 加载状态
@@ -1129,6 +1143,9 @@ const cloudImportForm = reactive({
 const cloudHostList = ref<any[]>([])
 const selectedCloudHosts = ref<any[]>([])
 const selectAllCloudHosts = ref(false)
+
+// 主机批量选择
+const selectedHosts = ref<any[]>([])
 
 const selectedCloudAccount = ref<any>(null)
 const selectedCloudGroup = ref<any>(null)
@@ -1364,9 +1381,14 @@ const openTerminalTab = () => {
 }
 
 const handleHostDblClick = async (data: any) => {
-  // 如果是主机节点，直接连接终端
+  // 如果是主机节点，跳转到终端页面
   if (data.type === 'host' || data.ip) {
-    activeTerminalHost.value = data
+    // 将主机信息存储到 sessionStorage
+    const dblClickHosts = JSON.parse(sessionStorage.getItem('dblClickHosts') || '[]')
+    dblClickHosts.push(data)
+    sessionStorage.setItem('dblClickHosts', JSON.stringify(dblClickHosts))
+    // 跳转到终端页面
+    window.location.href = '/terminal'
   } else if (activeView.value !== 'terminal') {
     // 如果是分组节点且不在终端视图，切换到终端视图
     await openTerminalView()
@@ -1675,9 +1697,22 @@ const handleExcelImport = () => {
 }
 
 // 下载模板
-const downloadTemplate = () => {
-  // TODO: 实现Excel模板下载
-  ElMessage.info('模板下载功能开发中...')
+const downloadTemplate = async () => {
+  try {
+    const blob = await downloadExcelTemplate()
+    // 创建下载链接
+    const url = window.URL.createObjectURL(new Blob([blob], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'host_import_template.xlsx'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('模板下载成功')
+  } catch (error) {
+    ElMessage.error('模板下载失败')
+  }
 }
 
 // 文件变化
@@ -1697,8 +1732,37 @@ const handleExcelImportSubmit = async () => {
     ElMessage.warning('请先上传Excel文件')
     return
   }
-  // TODO: 实现Excel导入逻辑
-  ElMessage.info('Excel导入功能开发中...')
+  try {
+    excelImporting.value = true
+    const file = uploadedFile.value.raw
+    const result = await importFromExcel(file)
+
+    if (result.successCount > 0) {
+      ElMessage.success(`成功导入 ${result.successCount} 台主机`)
+      loadHostList()
+      loadGroupTree()
+    }
+    if (result.failedCount > 0) {
+      ElMessage.warning(`${result.failedCount} 台主机导入失败`)
+      // 显示错误详情
+      if (result.errors && result.errors.length > 0) {
+        ElMessageBox.alert(
+          result.errors.join('<br>'),
+          '导入详情',
+          { dangerouslyUseHTMLString: true }
+        )
+      }
+    }
+
+    // 关闭对话框
+    excelImportVisible.value = false
+    uploadedFile.value = null
+    uploadRef.value?.clearFiles()
+  } catch (error: any) {
+    ElMessage.error(error.message || '导入失败')
+  } finally {
+    excelImporting.value = false
+  }
 }
 
 // 云主机导入
@@ -1770,6 +1834,43 @@ const handleGetCloudHosts = async () => {
 // 云主机选择变化
 const handleCloudHostSelectionChange = (selection: any[]) => {
   selectedCloudHosts.value = selection
+}
+
+// 主机选择变化
+const handleHostSelectionChange = (selection: any[]) => {
+  selectedHosts.value = selection
+}
+
+// 批量删除主机
+const handleBatchDelete = async () => {
+  if (selectedHosts.value.length === 0) {
+    ElMessage.warning('请先选择要删除的主机')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedHosts.value.length} 台主机吗？`,
+      '批量删除确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const hostIds = selectedHosts.value.map((h: any) => h.id)
+    await batchDeleteHosts(hostIds)
+
+    ElMessage.success('批量删除成功')
+    selectedHosts.value = []
+    loadHostList()
+    loadGroupTree()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '批量删除失败')
+    }
+  }
 }
 
 // 全选云主机

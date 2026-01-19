@@ -42,13 +42,16 @@ func (s *HTTPServer) RegisterRoutes(r *gin.RouterGroup) {
 	hosts := r.Group("/hosts")
 	{
 		hosts.GET("", s.hostService.ListHosts)
+		hosts.GET("/template/download", s.hostService.DownloadExcelTemplate)
+		hosts.POST("/import", s.hostService.ImportFromExcel)
+		hosts.POST("/batch-collect", s.hostService.BatchCollectHostInfo)
+		hosts.POST("/batch-delete", s.hostService.BatchDeleteHosts)
 		hosts.GET("/:id", s.hostService.GetHost)
 		hosts.POST("", s.hostService.CreateHost)
 		hosts.PUT("/:id", s.hostService.UpdateHost)
 		hosts.DELETE("/:id", s.hostService.DeleteHost)
 		hosts.POST("/:id/collect", s.hostService.CollectHostInfo)
 		hosts.POST("/:id/test", s.hostService.TestHostConnection)
-		hosts.POST("/batch-collect", s.hostService.BatchCollectHostInfo)
 	}
 
 	// 凭证管理
